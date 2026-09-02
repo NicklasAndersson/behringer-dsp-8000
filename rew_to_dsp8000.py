@@ -22,6 +22,7 @@ Användning:
     python rew_to_dsp8000.py grab FIL.syx        # spara en dump
     python rew_to_dsp8000.py probe [--manual]    # dumpa, ändra en sak, dumpa, diffa
     python rew_to_dsp8000.py push [--send-only] FIL.syx   # skicka en dump till enheten (RCV-test)
+    python rew_to_dsp8000.py apply [--dry-run] [--base FIL]  # patcha en dump med JSON:en (GEQ+PEQ) och pusha
     python rew_to_dsp8000.py calibrate           # interaktiv kalibrering
     python rew_to_dsp8000.py send --dry-run      # visa vad som skulle skickas
     python rew_to_dsp8000.py send                # skicka på riktigt (frågar först)
@@ -164,7 +165,7 @@ def _grab_with_retry(out, inp, label):
 
 
 GEQ_DATA_SPAN = (52, 128)   # data-offset-spann för GEQ-blocket (bit 373 .. 373+64*8, /7)
-PEQ_DATA_SPAN = (10, 25)    # data-offset-spann för de 6 PEQ-posterna (bit 87 .. 87+6*32, /7)
+PEQ_DATA_SPAN = (12, 40)    # data-offset-spann för de 6 PEQ-posterna (bit 87 .. 87+6*32=279, /7)
 
 
 def _report_dump_diff(before, after):
@@ -371,6 +372,29 @@ def load_band_gains():
     return {f: float(gains[str(f)]) for f in dsp8000.ISO_BANDS if str(f) in gains}
 
 
+def suggestion_to_geq_peq(data):
+    """rew_eq_suggestion.json-dict -> (geq [31 dB i ISO-ordning], peqs [6 poster
+    L1 R1 L2 R2 L3 R3]). Mätningen är L+R kombinerad, så samma kurva och samma
+    (upp till 3) PEQ läggs på båda kanalerna. Ren funktion - inget MIDI, testbar."""
+    gains = data.get("graphic_band_gains_db", {})
+    geq = [float(gains.get(str(f), gains.get(f, 0.0))) for f in dsp8000.ISO_BANDS]
+
+    filters = sorted(data.get("peq_filters", []),
+                     key=lambda f: abs(f.get("gaindB", 0)), reverse=True)[:dsp8000.PEQ_COUNT]
+    filters = sorted(filters, key=lambda f: f.get("frequency", 0))
+    recs = []
+    for f in filters:
+        q = f.get("q") or 0
+        recs.append({"freq_hz": f.get("frequency", 20.0),
+                     "bw_oct": dsp8000.q_to_octaves(q) if q > 0 else 1 / 3,
+                     "gain_db": f.get("gaindB", 0.0)})
+    peqs = []
+    for k in range(dsp8000.PEQ_COUNT):          # L1 R1 L2 R2 L3 R3: samma filter på L och R
+        rec = recs[k] if k < len(recs) else None
+        peqs += [rec, rec]
+    return geq, peqs
+
+
 def cc_map(channel):
     return (dsp8000.CC_GRAPHIC_LEFT if channel == "left"
             else dsp8000.CC_GRAPHIC_RIGHT)
@@ -424,6 +448,79 @@ def send(channel="both", midi_channel=1, dry_run=False, verify=False):
             print(f"  MISS {ch:5} {f:>7g} Hz: skickade {want:+.2f}, enheten har {got:+.2f} dB")
     print(f"--verify: {len(plan)-bad}/{len(plan)} band stämmer"
           + ("" if not bad else f" - {bad} tappade, kör send igen") + ".")
+
+
+def apply(base_path=None, dry_run=False):
+    """Hela skrivvägen via minnesdumpen: hämta enhetens nuvarande dump (eller en
+    --base-fil), patcha in GEQ + PEQ ur rew_eq_suggestion.json, pusha tillbaka och
+    läs tillbaka för att bekräfta. Skriver BÅDE grafisk EQ och parametriska filter
+    (till skillnad från `send`, som bara gör GEQ via CC och lämnar PEQ för hand).
+
+    Utgår från en färsk dump så allt vi inte förstår (master, delay, gate, limiter,
+    de 100 programmen) bevaras exakt. --base FIL: patcha en sparad dump i stället
+    (t.ex. en knapp-dump i 4F 12-format om enheten inte tar emot förfrågnings-
+    formatet 4F 0A). --dry-run: patcha och spara, pusha inte."""
+    if not JSON_FILE.exists():
+        raise SystemExit(f"{JSON_FILE} saknas - kör rew_script.py först.")
+    data = json.loads(JSON_FILE.read_text(encoding="utf-8"))
+    geq, peqs = suggestion_to_geq_peq(data)
+    n_peq = sum(1 for r in peqs[::2] if r)
+    print(f"Från {JSON_FILE}: 31 GEQ-band + {n_peq} PEQ-filter (på båda kanalerna).")
+
+    if base_path:
+        base = syx_tools.load(base_path)
+        if not syx_tools.is_memory_dump(base):
+            raise SystemExit(f"{base_path}: inte en minnesdump.")
+        print(f"Bas: {base_path} ({len(base)} byte, sub-kod {base[6]:02x} {base[7]:02x}).")
+    else:
+        with open_output() as out, open_input() as inp:
+            d = _grab_with_retry(out, inp, "Hämtar enhetens nuvarande dump (bas)")
+        base = b"\xf0" + d + b"\xf7"
+        print(f"Bas: färsk dump från enheten ({len(base)} byte, sub-kod {base[6]:02x} {base[7]:02x}).")
+
+    patched = syx_tools.patch_dump(base, geq_L=geq, geq_R=geq, peqs=peqs)
+    out_f = Path("dsp8000_applied.syx")
+    out_f.write_bytes(patched)
+    print(f"\nPatchad dump -> {out_f}. Ändringar mot basen:")
+    _report_dump_diff(base[1:-1], patched[1:-1])
+
+    if dry_run:
+        print(f"\n(dry-run: inget skickades. Pusha med: ./run.sh push {out_f})")
+        return
+
+    print("\nChecklista: båda MIDI-kablarna i, MIDI ON, EXCL RCV + SND ON, "
+          "PROTECT MEM av, enheten på EQ-huvudskärmen.")
+    input("Enter när allt stämmer (Ctrl-C avbryter): ")
+    if input(f"Skriva {out_f} till enheten? (ja/nej): ").strip().lower() != "ja":
+        raise SystemExit(f"Avbrutet. Den patchade dumpen finns i {out_f}.")
+    with open_output() as out, open_input() as inp:
+        out.send(mido.Message("sysex", data=list(patched[1:-1])))
+        print(f"  skickade {len(patched)} byte, väntar 6 s...")
+        time.sleep(6)
+        after = _grab_with_retry(out, inp, "Läser tillbaka")
+    _verify_applied(patched, b"\xf0" + after + b"\xf7")
+
+
+def _verify_applied(want, got):
+    """Jämför GEQ + PEQ i den skickade (want) och den återlästa (got) dumpen."""
+    gw, gg = syx_tools.decode_geq(want), syx_tools.decode_geq(got)
+    pw, pg = syx_tools.decode_peq(want), syx_tools.decode_peq(got)
+    bad = []
+    for ch in ("L", "R"):
+        for f, x, y in zip(dsp8000.ISO_BANDS, gw[ch], gg[ch]):
+            if abs(x - y) > 0.25:
+                bad.append(f"GEQ {ch} {f:g} Hz: ville {x:+.2f}, enheten har {y:+.2f} dB")
+    for lbl, x, y in zip(syx_tools.PEQ_LABELS, pw, pg):
+        if x != y:
+            bad.append(f"PEQ {lbl}: ville {syx_tools.peq_str(x)}, enheten har {syx_tools.peq_str(y)}")
+    if not bad:
+        print("\nOK: enheten har exakt det som skrevs (GEQ + PEQ). "
+              "Verifiera det akustiska resultatet med en REW-sweep.")
+    else:
+        print(f"\n{len(bad)} avvikelser - dumpen togs kanske inte emot "
+              "(prova --base med en knapp-dump i 4F 12-format, docs/midi.md avsnitt 4):")
+        for line in bad[:20]:
+            print("  " + line)
 
 
 def fit_scale(readings):
@@ -490,6 +587,11 @@ def main():
                     help="lämna bandet på --value i stället för att skicka 0 dB")
     pb.add_argument("--manual", action="store_true",
                     help="ingen CC - pausa och gör ändringen på enheten själv (PEQ m.m.)")
+    ap_ = sub.add_parser("apply")
+    ap_.add_argument("--dry-run", action="store_true",
+                     help="patcha och spara dsp8000_applied.syx, pusha inte")
+    ap_.add_argument("--base", metavar="FIL",
+                     help="patcha en sparad dump i stället för en färsk från enheten")
     for name in ("send", "calibrate"):
         sp = sub.add_parser(name)
         sp.add_argument("--midi-channel", type=int, default=1, choices=range(1, 17),
@@ -524,6 +626,8 @@ def main():
     elif args.cmd == "probe":
         probe_band(args.band, args.value, args.channel, args.midi_channel,
                    restore=None if args.no_restore else 64, manual=args.manual)
+    elif args.cmd == "apply":
+        apply(args.base, args.dry_run)
     elif args.cmd == "send":
         send(args.channel, args.midi_channel, args.dry_run, args.verify)
     elif args.cmd == "calibrate":

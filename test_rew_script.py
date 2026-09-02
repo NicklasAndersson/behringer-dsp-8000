@@ -403,6 +403,141 @@ def test_grab_with_retry_retries_on_enter_and_aborts_on_a():
         m.grab_dump, builtins.input = saved
 
 
+def test_patch_dump_roundtrips_and_stays_7bit():
+    """Patcha en riktig 0 dB-dump med känd GEQ + PEQ, avkoda tillbaka samma
+    värden, och kontrollera att inget vi inte skrev ändrades + 7-bit-safe."""
+    here = Path(__file__).parent
+    base = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    L = [0.0] * 31; L[5] = -8.0; L[17] = 3.0          # 63 Hz, 1 kHz
+    R = [0.0] * 31; R[0] = -16.0; R[30] = 15.75       # 20 Hz, 20 kHz
+    peqs = [{"freq_hz": 1000, "bw_oct": 1.0, "gain_db": -6.0}, None,
+            None, None, None, {"freq_hz": 80, "bw_oct": 0.5, "gain_db": 4.0}]
+    out = syx_tools.patch_dump(base, geq_L=L, geq_R=R, peqs=peqs)
+
+    assert len(out) == len(base) and out[:1] == b"\xf0" and out[-1:] == b"\xf7"
+    assert all(x < 128 for x in out[1:-1]), "databyte >= 128 - inte 7-bit-safe"
+    g = syx_tools.decode_geq(out)
+    assert g["L"] == L and g["R"] == R, (g["L"][:6], g["R"][:2])
+    pq = syx_tools.decode_peq(out)
+    assert pq[0]["on"] and abs(pq[0]["freq_hz"] - 1000) < 15 and pq[0]["gain_db"] == -6.0, pq[0]
+    assert abs(pq[0]["bw_oct"] - 1.0) < 0.02, pq[0]
+    assert pq[5]["on"] and pq[5]["gain_db"] == 4.0 and abs(pq[5]["freq_hz"] - 80) < 3, pq[5]
+    assert all(not pq[k]["on"] for k in (1, 2, 3, 4)), pq
+    # master orört: L/R-master samma som basen
+    gb = syx_tools.decode_geq(base)
+    assert g["L_master"] == gb["L_master"] and g["R_master"] == gb["R_master"]
+
+
+def test_patch_dump_leaves_untouched_channel_and_bytes():
+    here = Path(__file__).parent
+    base = (here / "dumps" / "dsp8000_sysex_p16db.syx").read_bytes()   # allt +16
+    out = syx_tools.patch_dump(base, geq_L=[0.0] * 31)                 # bara L -> 0
+    g = syx_tools.decode_geq(out)
+    assert g["L"] == [0.0] * 31 and g["R"] == [16.0] * 31, (g["L"][:3], g["R"][:3])
+    # bara GEQ L-blocket ska skilja mot basen; PEQ + programblock orörda
+    assert syx_tools.decode_peq(out) == syx_tools.decode_peq(base)
+    assert out[2000:] == base[2000:]        # långt bortom GEQ/PEQ = programminne, orört
+
+
+def test_suggestion_to_geq_peq_maps_json():
+    data = {
+        "graphic_band_gains_db": {"20": -0.5, "1000": 3.0, "20000": 2.5},
+        "peq_filters": [
+            {"frequency": 44, "gaindB": -3, "q": 3},
+            {"frequency": 80, "gaindB": -12, "q": 2},   # störst |gain|
+            {"frequency": 160, "gaindB": -8, "q": 6},
+        ],
+    }
+    geq, peqs = m.suggestion_to_geq_peq(data)
+    assert len(geq) == 31 and geq[0] == -0.5 and geq[17] == 3.0 and geq[30] == 2.5
+    assert geq[dsp8000.ISO_BANDS.index(25)] == 0.0        # saknas i JSON -> 0
+    # 3 filter, sorterade på frekvens, samma på L och R (L1 R1 L2 R2 L3 R3)
+    assert len(peqs) == 6 and peqs[0] == peqs[1] and peqs[2] == peqs[3] and peqs[4] == peqs[5]
+    assert [round(peqs[i]["freq_hz"]) for i in (0, 2, 4)] == [44, 80, 160]
+    assert peqs[2]["gain_db"] == -12
+    assert abs(peqs[0]["bw_oct"] - dsp8000.q_to_octaves(3)) < 1e-9
+
+
+def test_suggestion_to_geq_peq_pads_missing_peq():
+    data = {"graphic_band_gains_db": {}, "peq_filters": [
+        {"frequency": 60, "gaindB": -5, "q": 4}]}
+    geq, peqs = m.suggestion_to_geq_peq(data)
+    assert geq == [0.0] * 31
+    assert peqs[0] and peqs[1] and all(peqs[k] is None for k in (2, 3, 4, 5)), peqs
+
+
+def test_apply_end_to_end_with_fake_midi():
+    """apply med fejkad MIDI: bas hämtas, JSON patchas in, patchad dump pushas
+    som EN sysex, återläsning verifieras. Bygger JSON + bas i en temp-katalog."""
+    import builtins
+    import contextlib
+    import io
+    import types
+    here = Path(__file__).parent
+    base = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    sent = []
+
+    class FakePort:
+        def send(self, msg): sent.append(msg)
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    saved = (m.mido, m.open_output, m.open_input, m.grab_dump, m.JSON_FILE, builtins.input)
+    m.mido = types.SimpleNamespace(
+        Message=lambda type, data: types.SimpleNamespace(type=type, data=list(data)))
+    m.open_output = m.open_input = FakePort
+    try:
+        with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
+             contextlib.redirect_stdout(io.StringIO()):
+            gains = {str(f): 0.0 for f in dsp8000.ISO_BANDS}
+            gains["1000"] = 3.0
+            Path("rew_eq_suggestion.json").write_text(json.dumps({
+                "graphic_band_gains_db": gains,
+                "peq_filters": [{"frequency": 50, "gaindB": -6, "q": 4}]}))
+            m.JSON_FILE = Path("rew_eq_suggestion.json")
+            # bas hämtas först, sedan återläsning = den patchade (device tog emot)
+            grabs = iter([base[1:-1]])
+            m.grab_dump = lambda out, inp: (next(grabs) if sent == []
+                                            else bytes(sent[-1].data))
+            answers = iter(["", "ja"])                    # checklista, bekräfta
+            builtins.input = lambda prompt="": next(answers)
+            m.apply()
+            applied = Path("dsp8000_applied.syx").read_bytes()
+            g = syx_tools.decode_geq(applied)
+            assert g["L"][17] == 3.0 and g["R"][17] == 3.0
+            pq = syx_tools.decode_peq(applied)
+            assert pq[0]["on"] and pq[0]["gain_db"] == -6.0 and pq[1] == pq[0]
+        assert len(sent) == 1 and sent[0].type == "sysex" and len(sent[0].data) == 12110
+        assert bytes(sent[0].data) == applied[1:-1]
+    finally:
+        m.mido, m.open_output, m.open_input, m.grab_dump, m.JSON_FILE, builtins.input = saved
+
+
+def test_apply_dry_run_with_base_needs_no_device():
+    import builtins
+    import contextlib
+    import io
+    here = Path(__file__).parent
+    base_src = here / "dumps" / "dsp8000_sysex_0db.syx"
+    saved = (m.open_output, m.open_input, m.JSON_FILE, builtins.input)
+    m.open_output = m.open_input = lambda *a: (_ for _ in ()).throw(
+        AssertionError("dry-run med --base ska inte röra MIDI"))
+    try:
+        with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
+             contextlib.redirect_stdout(io.StringIO()):
+            (Path(d) / "base.syx").write_bytes(base_src.read_bytes())
+            Path("rew_eq_suggestion.json").write_text(json.dumps({
+                "graphic_band_gains_db": {"1000": -4.0}, "peq_filters": []}))
+            m.JSON_FILE = Path("rew_eq_suggestion.json")
+            builtins.input = lambda *a: (_ for _ in ()).throw(AssertionError("ska inte fråga"))
+            m.apply(base_path="base.syx", dry_run=True)
+            g = syx_tools.decode_geq(Path("dsp8000_applied.syx").read_bytes())
+            assert g["L"][17] == -4.0 and g["R"][17] == -4.0
+    finally:
+        m.open_output, m.open_input, m.JSON_FILE, builtins.input = saved
+
+
 def test_run_gui_allowlist_and_streams_help():
     """Starta panelen på en ledig port, avvisa okänt kommando, kör `help`,
     se att utskriften strömmas och exit-koden landar."""
@@ -434,6 +569,79 @@ def test_run_gui_allowlist_and_streams_help():
     assert "REW -> DSP8000" in j["text"] and "[klar, exit 0]" in j["text"], j["text"][:200]
     assert "error" in post("/stdin", {"line": "x"}), "stdin utan process ska ge fel"
     srv.shutdown()
+
+
+def test_run_gui_device_read_write_and_suggestion():
+    """run_gui:s enhetsendpoints med fejkad MIDI: read avkodar en dump, write
+    patchar en färsk bas + skickar EN sysex + verifierar, suggestion läser JSON."""
+    import builtins
+    import contextlib
+    import io
+    import types
+    import run_gui
+    import rew_to_dsp8000 as rmod
+    here = Path(__file__).parent
+    base = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    sent = []
+
+    class FakePort:
+        def send(self, msg): sent.append(msg)
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    saved = (rmod.mido, rmod.open_output, rmod.open_input, rmod.grab_dump, rmod.JSON_FILE)
+    rmod.mido = types.SimpleNamespace(
+        Message=lambda type, data: types.SimpleNamespace(type=type, data=list(data)))
+    rmod.open_output = rmod.open_input = FakePort
+    try:
+        # read
+        rmod.grab_dump = lambda out, inp: base[1:-1]
+        d = run_gui.device_read()
+        assert d["geq_L"] == [0.0] * 31 and len(d["peq"]) == 3 and d["sub"] == "4f 12"
+
+        # write: bas hämtas, patchad skickas, återläsning = det skickade
+        sent.clear()
+        rmod.grab_dump = lambda out, inp: base[1:-1] if not sent else bytes(sent[-1].data)
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            geq = [0.0] * 31; geq[17] = 3.0
+            peq = [{"on": True, "freq_hz": 50, "bw_oct": 0.33, "gain_db": -6.0},
+                   {"on": False, "freq_hz": 60, "bw_oct": 0.3, "gain_db": 0},
+                   {"on": False, "freq_hz": 60, "bw_oct": 0.3, "gain_db": 0}]
+            res = run_gui.device_write(geq, peq)
+            assert res["mismatches"] == [], res["mismatches"]
+            applied = Path("dsp8000_applied.syx").read_bytes()
+        assert len(sent) == 1 and sent[0].type == "sysex" and len(sent[0].data) == 12110
+        g = syx_tools.decode_geq(applied); pq = syx_tools.decode_peq(applied)
+        assert g["L"][17] == 3.0 and g["R"][17] == 3.0
+        assert pq[0]["on"] and pq[0]["gain_db"] == -6.0 and pq[2]["on"] is False
+
+        # suggestion
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            Path("s.json").write_text(json.dumps({
+                "graphic_band_gains_db": {"1000": -2.0},
+                "peq_filters": [{"frequency": 44, "gaindB": -5, "q": 4}]}))
+            rmod.JSON_FILE = Path("s.json")
+            sug = run_gui.suggestion()
+            assert sug["geq"][17] == -2.0 and sug["peq"][0]["on"] and round(sug["peq"][0]["freq_hz"]) == 44
+            assert sug["peq"][1] is None
+    finally:
+        rmod.mido, rmod.open_output, rmod.open_input, rmod.grab_dump, rmod.JSON_FILE = saved
+
+
+def test_run_gui_device_read_errors_without_mido():
+    import run_gui
+    import rew_to_dsp8000 as rmod
+    saved = rmod.mido
+    rmod.mido = None
+    try:
+        try:
+            run_gui.device_read()
+            assert False, "skulle ha kastat DeviceError"
+        except run_gui.DeviceError:
+            pass
+    finally:
+        rmod.mido = saved
 
 
 def test_dsp8000_selftest():
