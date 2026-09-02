@@ -29,9 +29,14 @@ Eller allt på en gång (skapar venv, installerar, kör):
 
 ```sh
 ./run.sh                    # = rew_script.py, flaggor skickas vidare (--no-peq, --refine …)
+./run.sh refine             # = rew_script.py --refine --yes (snabbt andra varv, ingen fråga)
+./run.sh target                       # = rew_script.py --show-target (visa REW:s fältnamn)
+./run.sh target K=V [K=V ...]         # = rew_script.py --target K=V ... --yes
+./run.sh house-curve PATH|--clear     # = rew_script.py --house-curve PATH --yes / --clear-house-curve --yes
 ./run.sh send --dry-run     # = rew_to_dsp8000.py send --dry-run (ports/monitor/sysex/calibrate också)
 ./run.sh show               # = show_config.py
 ./run.sh test               # = test_rew_script.py (kräver varken REW eller enheten)
+./run.sh help               # full kommandolista med beskrivningar
 ```
 
 **Krav innan steg 1 fungerar:**
