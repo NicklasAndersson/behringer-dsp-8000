@@ -225,10 +225,11 @@ publicerade aldrig detta.
 > enheten på *varje* `70`-läsförfrågan (`70 01`, `70 10 1F`, `70 64` …)
 > med samma sak: hela den packade 12110-byte-dumpen
 > (`F0 00 20 32 00 01 4F 0A …`), ~5 s efter förfrågan – aldrig ett kort,
-> granulärt svar. Skrivkommandona (`10h`, `21h` …) är **oprövade** men lär
-> inte fungera när `0E` ignoreras och `01` bara dumpar. DSP8000:s OS har
-> alltså en mycket enklare SysEx-hanterare. **Allt nedan är
-> DSP8024-referens**, återgivet efter ADRStudio.
+> granulärt svar. Realtidsskrivningen `10h` (GEQ-band) är nu **testad** och
+> gör **inget** – varken med modellbyte `01` eller `0E` ändras dumpen (0 byte,
+> kontrollerat mot GEQ-avkodningen 2026-09-02). `21h`/`1F`/`20` (PEQ) lär vara
+> lika döda. DSP8000:s OS har alltså en mycket enklare SysEx-hanterare – den
+> kan bara dumpa. **Allt nedan är DSP8024-referens**, återgivet efter ADRStudio.
 
 **Om notationen nedan:** kommandobyte anges hex. Datavärden återges som
 ADRStudio skrev dem – där blandas decimalt och hex utan markering, och
@@ -436,9 +437,11 @@ kablarna, MIDI ON, EXCL SND+RCV ON, enheten på EQ-huvudskärmen).
   Resten – dvs. i praktiken alla 100 sparade program – är **bit för bit
   lika**. Sparad: `dsp8000_sysex_ondemand.syx`.
 - Alltså: **DSP8000:s enda SysEx-svar är hela minnesdumpen.** Ingen
-  granulär läsning, ingen systemversion-sträng. Realtidsskrivningarna
-  (ADRStudio:s `10h`/`21h` osv.) är **oprövade** men lär vara chanslösa när
-  `0E` ignoreras och `01`+`70` bara dumpar.
+  granulär läsning, ingen systemversion-sträng.
+- **Realtidsskrivning `10h` testad 2026-09-02** (skicka `10 11 30`, dumpa,
+  avkoda GEQ): dumpen ändras **inte** – varken modellbyte `01` eller `0E`.
+  ADRStudio:s `1F`/`20`/`21` (PEQ) lär vara lika döda. Att läsa/skriva PEQ
+  kräver alltså den packade dumpen; `probe --manual` kartlägger den.
 
 ### Vad vi faktiskt vann
 
@@ -454,7 +457,9 @@ kablarna, MIDI ON, EXCL SND+RCV ON, enheten på EQ-huvudskärmen).
 
 ### Vad som är dödt
 
-- Realtids-PEQ via MIDI: nej (varken CC eller SysEx på denna enhet).
+- Realtids-PEQ via MIDI: nej (varken CC eller SysEx på denna enhet – `10h`
+  testad och död). PEQ kan bara läsas ur den packade dumpen (ej kartlagd
+  än – `probe --manual`) eller ställas för hand + sparas som program.
 - Granulär GEQ-läsning: nej – men hela dumpen kan hämtas på begäran och
   GEQ-banden avkodas ur den (avsnitt 7), vilket räcker för `send --verify`.
 - EQ-Design-mjukvaran skulle möjligen prata med enheten (den använder

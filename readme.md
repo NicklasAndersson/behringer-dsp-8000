@@ -282,9 +282,10 @@ Fungerar (`rew_to_dsp8000.py monitor`) med **båda kablarna inkopplade**
 - **SysEx‑förfrågan (verifierat 2026‑09‑02, `rew_to_dsp8000.py sysex`):**
   `F0 00 20 32 00 01 70 <xx> F7` med *valfri* `xx` (`01`, `10 1F`, `64` …)
   → enheten svarar med **hela minnesdumpen** (`… 4F 0A …`, 12110 byte,
-  ~5 s). Modellbyte `0E` (DSP8024/ADRStudio) ger **inget svar**. DSP8000:s
-  OS har alltså ingen granulär SysEx‑läsning eller realtidsskrivning – bara
-  hela dumpen. Detaljer + ADRStudio:s DSP8024‑protokoll: `dsp8000_midi_webbresearch.md`.
+  ~5 s). Modellbyte `0E` (DSP8024/ADRStudio) ger **inget svar**, och
+  ADRStudios realtidsskrivning `10h` gör **inget** (testad 2026‑09‑02 —
+  dumpen ändras inte). DSP8000:s OS kan alltså bara dumpa allt. Detaljer +
+  ADRStudio:s DSP8024‑protokoll: `dsp8000_midi_webbresearch.md`.
   Praktisk vinst: dumpen kan hämtas **utan fader‑nudge**.
 - Dumpen = 10‑byte header (`00 20 32 00 01 4F <sub> 20 00`, `4F` = dump;
   `sub` = `12` från knappen, `0A` från `70`‑förfrågan) + 12100 databyte,
@@ -307,9 +308,10 @@ Fungerar (`rew_to_dsp8000.py monitor`) med **båda kablarna inkopplade**
   till ren 0 dB. Den gamla "8 byte/band med bitvikter"‑tolkningen och
   slutsatsen "stor överföringsbugg" var **avkodningsfel**, inte tappade CC.
 - Resten av blocket (PEQ, master‑skala, delay, gate, limiter, 100 program)
-  är **inte kartlagt**. `probe` gör fler kontrollerade captures
-  reproducerbara om det behövs. Master‑värdet läses rått (verkar 0‑centrerat
-  men skalan är inte verifierad).
+  är **inte kartlagt**. Working buffer‑delen ligger i data‑offset ~0–52
+  (före GEQ, i baseline‑dumpen mest nollor ⇒ PEQ av) — kartläggs med
+  `probe --manual`: dumpa, ändra EN PEQ‑parameter på enheten, dumpa, diff.
+  Master‑värdet läses rått (verkar 0‑centrerat men skalan är inte verifierad).
 - Fader‑rörelse ger dessutom en **direkt läsbar** 64‑byte GEQ‑status:
   `F0 00 20 32 00 01 33 09 <32 vä> <32 hö> F7`, position 0–30 = band,
   31 = master, `64` = 0 dB. Kräver en fader‑nudge för hand.
@@ -488,7 +490,9 @@ Läser `rew_eq_suggestion.json` och skickar de 31 bandvärdena som MIDI CC.
 | `python rew_to_dsp8000.py monitor` | lyssnar på vad DSP8000 skickar (retur­väg); fader-framen skrivs ut i dB |
 | `python rew_to_dsp8000.py sysex [--write-test]` | frågar enheten via SysEx, sparar svaret som `.syx` — bekräftar att bara hela dumpen kommer tillbaka (se avsnitt 6) |
 | `python rew_to_dsp8000.py readback` | hämtar dumpen på begäran och skriver ut de 31+31 grafiska banden i dB (ändrar inget) |
+| `python rew_to_dsp8000.py grab FIL.syx` | hämtar en dump och sparar (ändrar inget) — bygg upp ett bibliotek av kända tillstånd att diffa |
 | `python rew_to_dsp8000.py probe [--band 1000] [--value 127] [--channel left]` | kontrollerad capture: dumpa, sätt ett band via CC, dumpa igen, visa vilka byte + band som ändrades. Återställer bandet till 0 dB (`--no-restore` låter bli) |
+| `python rew_to_dsp8000.py probe --manual` | som `probe` men utan CC: pausar medan du ändrar EN sak på enheten (PEQ, delay, gate …), sedan diff. Så kartläggs delarna som inte går via MIDI |
 | `python rew_to_dsp8000.py calibrate [--band 1000]` | verifierar `db_to_cc` mot displayen |
 | `python rew_to_dsp8000.py send --dry-run` | visar alla CC utan att skicka |
 | `python rew_to_dsp8000.py send [--channel left\|right\|both] [--midi-channel N] [--verify]` | skickar (frågar "ja" först). `--verify` hämtar dumpen efteråt och rapporterar band som inte landade |
@@ -625,3 +629,6 @@ Nytt i denna version:
   31+31 banden i dB, `rew_to_dsp8000.py readback` hämtar dem från enheten,
   `probe` gör kontrollerade captures, `send --verify` kollar att banden
   landade. Bitström MSB‑packad, offset 373, 64 × 8‑bit tecknat, `dB = v/4`.
+- `rew_to_dsp8000.py grab FIL.syx` (spara en dump) och `probe --manual`
+  (kartlägg PEQ/delay m.m. — pausa medan du ändrar på enheten). ADRStudios
+  realtidsskrivning `10h` testad och **död** på DSP8000.
