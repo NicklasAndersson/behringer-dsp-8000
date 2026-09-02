@@ -353,7 +353,7 @@ def test_push_sends_dump_and_saves_before_after():
     try:
         grabs = iter([zero, dump[1:-1]])
         m.grab_dump = lambda out, inp: next(grabs)
-        answers = iter(["ja", ""])
+        answers = iter(["", "ja"])   # Enter vid checklistan, ja vid sändning
         builtins.input = lambda prompt="": next(answers)
         log = io.StringIO()
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
@@ -370,7 +370,7 @@ def test_push_sends_dump_and_saves_before_after():
         # --send-only: ingen grab, inga filer
         sent.clear()
         m.grab_dump = lambda *a: (_ for _ in ()).throw(AssertionError("skulle inte dumpa"))
-        answers = iter(["ja", ""])
+        answers = iter(["", "ja"])   # Enter vid checklistan, ja vid sändning
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
              contextlib.redirect_stdout(io.StringIO()):
             m.push(str(dump_path), send_only=True)
@@ -378,6 +378,29 @@ def test_push_sends_dump_and_saves_before_after():
         assert len(sent) == 1 and bytes(sent[0].data) == dump[1:-1]
     finally:
         m.mido, m.open_output, m.open_input, m.grab_dump, builtins.input = saved
+
+
+def test_grab_with_retry_retries_on_enter_and_aborts_on_a():
+    import builtins
+    import contextlib
+    import io
+    saved = (m.grab_dump, builtins.input)
+    try:
+        grabs = iter([None, b"\x00" * 12110])
+        m.grab_dump = lambda out, inp: next(grabs)
+        builtins.input = lambda prompt="": ""          # Enter = försök igen
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert m._grab_with_retry(None, None, "x") == b"\x00" * 12110
+        m.grab_dump = lambda out, inp: None
+        builtins.input = lambda prompt="": "a"         # a = avbryt
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                m._grab_with_retry(None, None, "x")
+            assert False, "skulle ha avbrutit"
+        except SystemExit:
+            pass
+    finally:
+        m.grab_dump, builtins.input = saved
 
 
 def test_run_gui_allowlist_and_streams_help():

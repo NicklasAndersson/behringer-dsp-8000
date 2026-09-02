@@ -148,6 +148,21 @@ def grab_dump(out, inp, req=(0x70, 0x01)):
     return None
 
 
+def _grab_with_retry(out, inp, label):
+    """grab_dump, men vid uteblivet svar: vänta på Enter och försök igen, så att
+    man hinner rätta kablar/skärm/EXCL i stället för att hela körningen avbryts."""
+    while True:
+        print(f"{label}...")
+        d = grab_dump(out, inp)
+        if d is not None:
+            return d
+        ans = input("  Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i (DSP OUT -> "
+                    "interface IN), enheten på EQ-huvudskärmen. "
+                    "Enter = försök igen, a = avbryt: ")
+        if ans.strip().lower().startswith("a"):
+            raise SystemExit("Avbrutet.")
+
+
 GEQ_DATA_SPAN = (52, 128)   # data-offset-spann för GEQ-blocket (bit 373 .. 373+64*8, /7)
 PEQ_DATA_SPAN = (10, 25)    # data-offset-spann för de 6 PEQ-posterna (bit 87 .. 87+6*32, /7)
 
@@ -186,10 +201,7 @@ def grab(path):
     """Hämta en dump på begäran och spara den. Ändrar inget på enheten.
     Bygg upp ett bibliotek av kända tillstånd att diffa med syx_tools."""
     with open_output() as out, open_input() as inp:
-        d = grab_dump(out, inp)
-    if d is None:
-        raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
-                         "enheten på EQ-huvudskärmen.")
+        d = _grab_with_retry(out, inp, "Hämtar dump")
     Path(path).write_bytes(b"\xf0" + d + b"\xf7")
     print(f"{len(d)} databyte -> {path}  (sub-kod {d[5]:02x} {d[6]:02x})")
 
@@ -212,11 +224,7 @@ def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
         before_f = Path(f"probe_{band_freq:g}Hz_{channel}_before_{ts}.syx")
         after_f = Path(f"probe_{band_freq:g}Hz_{channel}_after_cc{value}_{ts}.syx")
     with open_output() as out, open_input() as inp:
-        print("Dump 1/2 (före)...")
-        before = grab_dump(out, inp)
-        if before is None:
-            raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
-                             "enheten på EQ-huvudskärmen.")
+        before = _grab_with_retry(out, inp, "Dump 1/2 (före)")
         if manual:
             input("  Gör EN ändring på enheten nu (t.ex. PEQ 1 gain -6 dB), "
                   "tryck Enter när klar: ")
@@ -226,10 +234,7 @@ def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
             out.send(mido.Message("control_change", channel=midi_channel - 1,
                                   control=cc_num, value=value))
             time.sleep(0.3)
-        print("Dump 2/2 (efter)...")
-        after = grab_dump(out, inp)
-        if after is None:
-            raise SystemExit("Andra dumpen kom inte. Enheten kanske bytte skärm.")
+        after = _grab_with_retry(out, inp, "Dump 2/2 (efter)")
         if not manual and restore is not None:
             out.send(mido.Message("control_change", channel=midi_channel - 1,
                                   control=cc_num, value=restore))
@@ -242,10 +247,11 @@ def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
 
 def push(path, send_only=False):
     """Skicka en sparad minnesdump (F0 … 4F … F7) tillbaka till enheten - testet
-    av RCV MEMORY DUMP (protokoll i docs/midi.md avsnitt 4). Dumpar före och
-    efter och diffar, så du ser om enheten tog emot något. Före-dumpen sparas
-    alltid som återställningspunkt. KAN SKRIVA ÖVER enhetens minne
-    (arbetsbuffert + 100 program) - använd bara dumpar från samma enhet.
+    av RCV MEMORY DUMP (protokoll i docs/midi.md avsnitt 4). Flöde: checklista
+    (Enter) -> före-dump -> bekräfta med "ja" när enheten är i rätt läge ->
+    skicka -> efter-dump -> diff. Uteblivet svar ger "försök igen", inte avbrott.
+    Före-dumpen sparas alltid som återställningspunkt. KAN SKRIVA ÖVER enhetens
+    minne (arbetsbuffert + 100 program) - använd bara dumpar från samma enhet.
 
     send_only: bara skicka, ingen före/efter-dump. För loopback-testet av
     interfacet (`monitor` i ett annat fönster, interface OUT -> IN) eller om
@@ -253,12 +259,15 @@ def push(path, send_only=False):
     b = syx_tools.load(path)
     if not syx_tools.is_memory_dump(b):
         raise SystemExit(f"{path}: inte en minnesdump (F0 00 20 32 00 01 4F …).")
-    fmt = ("knapp-format (SND MEMORY DUMP)" if b[6] == 0x12
+    fmt = ("knapp-format (SND MEMORY DUMP)" if b[7] == 0x12
            else "förfrågnings-format (70-svar)")
     print(f"{path}: {len(b)} byte, header {b[:11].hex(' ')} = {fmt}.")
-    print("Det här kan SKRIVA ÖVER enhetens minne (arbetsbuffert + 100 program).")
-    if input("Skicka till enheten? (ja/nej): ").strip().lower() != "ja":
-        raise SystemExit("Avbrutet.")
+    print("Det här kan SKRIVA ÖVER enhetens minne (arbetsbuffert + 100 program).\n")
+    print("Checklista:\n"
+          "  - båda MIDI-kablarna i (interface OUT -> DSP IN, DSP OUT -> interface IN)\n"
+          "  - MIDI ON, EXCL RCV + SND ON, PROTECT MEM av\n"
+          "  - enheten på EQ-huvudskärmen")
+    input("Enter när allt stämmer (Ctrl-C avbryter): ")
     ts = time.strftime("%H%M%S")
     before_f = Path(f"probe_push_before_{ts}.syx")
     before = after = None
@@ -266,16 +275,13 @@ def push(path, send_only=False):
         inp = None if send_only else open_input()
         try:
             if inp:
-                print("Dump 1/2 (före)...")
-                before = grab_dump(out, inp)
-                if before is None:
-                    raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
-                                     "enheten på EQ-huvudskärmen. (--send-only hoppar "
-                                     "över dumparna.)")
+                before = _grab_with_retry(out, inp, "Dump 1/2 (före)")
                 before_f.write_bytes(b"\xf0" + before + b"\xf7")
                 print(f"  återställningspunkt: {before_f}  (push den om något gick fel)")
-            input("  Testa knappvägen? Tryck + på RCV MEMORY DUMP på enheten nu, "
-                  "annars inte. Enter skickar: ")
+            print("\nVill du testa knappvägen: tryck + på RCV MEMORY DUMP på enheten NU, "
+                  "innan du svarar. Annars låt bli.")
+            if input(f"Skicka {len(b)} byte till enheten? (ja/nej): ").strip().lower() != "ja":
+                raise SystemExit("Avbrutet." + (f" Före-dumpen finns i {before_f}." if before else ""))
             out.send(mido.Message("sysex", data=list(b[1:-1])))
             print(f"  skickade {len(b)} byte, väntar 6 s (12 kB @ 31250 baud ≈ 4 s)...")
             time.sleep(6)
@@ -283,15 +289,10 @@ def push(path, send_only=False):
                 print("Klart (--send-only, ingen återläsning). Kolla displayen, eller "
                       "monitor-fönstret vid loopback: det ska visa en SysEx på 12110 byte.")
                 return
-            print("Dump 2/2 (efter)...")
-            after = grab_dump(out, inp)
+            after = _grab_with_retry(out, inp, "Dump 2/2 (efter)")
         finally:
             if inp:
                 inp.close()
-    if after is None:
-        raise SystemExit("Andra dumpen kom inte - enheten står kanske kvar i "
-                         "mottagningsläge eller bytte skärm. Kolla displayen, kör "
-                         "readback separat. Före-dumpen är sparad.")
     Path(f"probe_push_after_{ts}.syx").write_bytes(b"\xf0" + after + b"\xf7")
     _report_dump_diff(before, after)
     print("\nKolla också displayen: ändrades GEQ/PEQ där? Anteckna utfallet enligt "
@@ -306,10 +307,7 @@ def readback():
     """Hämta dumpen på begäran (ingen fader-nudge) och skriv ut de 31+31
     grafiska banden + de 6 PEQ-filtren. Ändrar inget. Kräver båda MIDI-kablarna."""
     with open_output() as out, open_input() as inp:
-        d = grab_dump(out, inp)
-    if d is None:
-        raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
-                         "enheten på EQ-huvudskärmen.")
+        d = _grab_with_retry(out, inp, "Hämtar dump")
     full = b"\xf0" + d + b"\xf7"
     g = syx_tools.decode_geq(full)
     for name in ("L", "R"):
@@ -415,9 +413,7 @@ def send(channel="both", midi_channel=1, dry_run=False, verify=False):
             print("Verifiera med en ny REW-sweep.")
             return
         time.sleep(0.4)
-        d = grab_dump(out, inp)
-    if d is None:
-        raise SystemExit("--verify: ingen dump kom tillbaka (returväg inkopplad?).")
+        d = _grab_with_retry(out, inp, "--verify: hämtar dump")
     g = _geq_from_dump(d)
     bad = 0
     for ch, f, _, cc_val in plan:

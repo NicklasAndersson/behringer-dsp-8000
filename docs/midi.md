@@ -122,9 +122,11 @@ enda kvarvarande vägen till fjärrstyrd PEQ på DSP8000.
 5. Måste enheten stå på EQ-huvudskärmen (som för förfrågan)?
 6. Blockerar PROTECT MEM?
 
-**Testprotokoll** – `./run.sh push FIL.syx` dumpar före, skickar filen,
-väntar 6 s (12 kB @ 31 250 baud ≈ 4 s), dumpar efter och diffar. Före-dumpen
-sparas alltid som `probe_push_before_<tid>.syx` (återställningspunkt).
+**Testprotokoll** – `./run.sh push FIL.syx` visar en checklista (Enter), tar
+före-dumpen, väntar på `ja` när enheten är i rätt läge, skickar filen, väntar
+6 s (12 kB @ 31 250 baud ≈ 4 s), tar efter-dumpen och diffar. Uteblivet svar
+ger "Enter = försök igen", inte avbrott. Före-dumpen sparas alltid som
+`probe_push_before_<tid>.syx` (återställningspunkt).
 
 *Förkrav:* båda MIDI-kablarna i, MIDI ON, EXCL RCV + SND ON, PROTECT MEM av,
 enheten på EQ-huvudskärmen. Extra backup först: `./run.sh grab dumps/backup.syx`.
@@ -133,8 +135,8 @@ enheten på EQ-huvudskärmen. Extra backup först: `./run.sh grab dumps/backup.s
 |---|---|---|
 | 0 | **Pre-flight utan enheten:** koppla interface OUT → interface IN. Fönster 1: `./run.sh monitor --seconds 90`. Fönster 2: `./run.sh push --send-only dumps/dsp8000_sysex_p16db.syx` | `monitor` ska rapportera **en SysEx på 12110 byte**. Kortare eller ingen = interfacet tappar långa SysEx, och inget nedan säger då något om enheten |
 | 1 | `./run.sh readback` | Notera GEQ-läget. Står allt redan på +16 dB: ställ om något band så förändringen syns |
-| 2 | `./run.sh push dumps/dsp8000_sysex_p16db.syx`, svara `ja`, tryck **bara Enter** vid knapp-frågan | **A:** diffen visar GEQ → +16 och displayen visar +16: enheten tar emot dumpar spontant, EXCL RCV räcker. **B:** "Ingen byte ändrades": gå till 3. **C:** "Andra dumpen kom inte": enheten bytte läge – kolla displayen, tryck OK/EQ, kör `readback` |
-| 3 | Samma, men tryck `+` på **RCV MEMORY DUMP** innan Enter | Som ovan. Notera vad displayen visar efter `+` (väntar den? timeout?) |
+| 2 | `./run.sh push dumps/dsp8000_sysex_p16db.syx`: Enter vid checklistan, före-dumpen tas, tryck **inte** på enheten, svara `ja` | **A:** diffen visar GEQ → +16 och displayen visar +16: enheten tar emot dumpar spontant, EXCL RCV räcker. **B:** "Ingen byte ändrades": gå till 3. **C:** "Andra dumpen kom inte": enheten bytte läge – kolla displayen, tryck OK/EQ, kör `readback` |
+| 3 | Samma, men tryck `+` på **RCV MEMORY DUMP** innan du svarar `ja` | Som ovan. Notera vad displayen visar efter `+` (väntar den? timeout?) |
 | 4 | Inget i 2–3: `./run.sh push dumps/dsp8000_sysex_ondemand.syx` (förfrågnings-format `4F 0A 40`), utan och med knappen | Innehållet är en annan kurva (inte +16), så diffen blir stor om det tar |
 | 5 | Ändrades dumpen men inte displayen: Program Change till aktuellt program, sedan `./run.sh readback` | Skiljer på arbetsbuffert (syns direkt) och programminne (syns efter PC) |
 | 6 | Återställ: `./run.sh push probe_push_before_<tid>.syx` (eller ställ tillbaka för hand), sedan `./run.sh readback` | |
