@@ -1,5 +1,8 @@
-Råa MIDI-captures från DSP8000 2026-08-31. För att lista ut CC-mappning +
-SysEx-format. Se readme avsnitt 6.
+Rå labblogg: MIDI-captures från DSP8000 2026-08-31 -> 2026-09-02.
+Kronologisk; senare poster RÄTTAR tidigare (t.ex. '8 byte/band'-tolkningen).
+Aktuellt läge och avkodad dump-layout: docs/midi.md. Filnamn som nämns
+nedan (_12110, _0844, _min/_max, _m16db) finns inte längre; referensdumparna
+ligger i dumps/ (se docs/midi.md 6.6).
 
 == 2026-09-02 (forts): GEQ-DUMPEN AVKODAD - rättar allt nedan om "8 byte/band" ==
 Med rew_to_dsp8000.py probe (dumpa, sätt ETT band via CC, dumpa, diffa):

@@ -20,9 +20,10 @@ REW -> DSP8000 (steg 1, rew_script.py):
 DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh ports                  lista MIDI-portar
   ./run.sh monitor                lyssna på vad DSP8000 skickar (returväg)
-  ./run.sh sysex                  fråga enheten via SysEx (dumpar minnet, se readme avsnitt 6)
+  ./run.sh sysex                  fråga enheten via SysEx (dumpar minnet, se docs/midi.md)
   ./run.sh readback               läs enhetens GEQ-band + 6 PEQ-filter ur dumpen (ändrar inget)
   ./run.sh grab FIL.syx           hämta en dump och spara (bygg bibliotek av kända tillstånd)
+  ./run.sh push FIL.syx           skicka en dump till enheten (test av RCV MEMORY DUMP, docs/midi.md avsnitt 4)
   ./run.sh probe [--band N --value CC]  dumpa, sätt ett band via CC, dumpa, diffa
   ./run.sh probe --manual         dumpa, pausa medan du ändrar PEQ/delay på enheten, dumpa, diffa
   ./run.sh calibrate              kalibrera CC->dB mot enhetens display, en gång per enhet
@@ -30,6 +31,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh send [--verify]        skicka de 31 bandvärdena (frågar först); --verify läser tillbaka
 
 Övrigt:
+  ./run.sh gui                    webb-GUI för allt ovan (http://127.0.0.1:8765), svara på frågor i sidan
   ./run.sh show                   generera + öppna dsp8000_config.html ur rew_eq_suggestion.json
   ./run.sh test                   självtester, kräver varken REW, mido eller enheten
   ./run.sh help                   den här listan
@@ -48,8 +50,10 @@ fi
 .venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
 
 case "$1" in
-  ports|monitor|sysex|readback|grab|probe|calibrate|send)
+  ports|monitor|sysex|readback|grab|push|probe|calibrate|send)
     exec .venv/bin/python rew_to_dsp8000.py "$@" ;;
+  gui)
+    shift; exec .venv/bin/python run_gui.py "$@" ;;
   show)
     shift; exec .venv/bin/python show_config.py "$@" ;;
   test)

@@ -1,8 +1,10 @@
 """
 Steg 2: rew_eq_suggestion.json -> MIDI CC till DSP8000:s grafiska EQ.
 
-Bara den grafiska 31-bands-EQ:n kan fjärrstyras (via CC). De parametriska
-filtren måste ställas för hand - kör show_config.py och läs av dem där.
+Bara den grafiska 31-bands-EQ:n kan skrivas via MIDI (CC). De parametriska
+filtren måste ställas för hand (show_config.py visar dem) - men både GEQ och
+PEQ kan LÄSAS tillbaka ur enhetens minnesdump (readback). MIDI-referens:
+docs/midi.md.
 
 CC->dB-skalan (dsp8000.db_to_cc, CC = 64 + dB*4) är verifierad mot
 testenheten 2026-09-02. Kör `calibrate` en gång om du har en annan enhet.
@@ -14,8 +16,12 @@ Beroenden:
 Användning:
     python rew_to_dsp8000.py ports              # lista MIDI-portar
     python rew_to_dsp8000.py monitor            # lyssna på vad DSP8000 skickar
-    python rew_to_dsp8000.py sysex              # prova ADRStudio-SysEx mot enheten
-    python rew_to_dsp8000.py sysex --write-test  # + testa en realtidsskrivning
+    python rew_to_dsp8000.py sysex              # SysEx-förfrågan (modell 01 + 0E), spara svar
+    python rew_to_dsp8000.py sysex --write-test  # + testa ADRStudio-realtidsskrivning (död)
+    python rew_to_dsp8000.py readback            # GEQ + PEQ ur enhetens dump (ändrar inget)
+    python rew_to_dsp8000.py grab FIL.syx        # spara en dump
+    python rew_to_dsp8000.py probe [--manual]    # dumpa, ändra en sak, dumpa, diffa
+    python rew_to_dsp8000.py push FIL.syx        # skicka en dump till enheten (RCV-test)
     python rew_to_dsp8000.py calibrate           # interaktiv kalibrering
     python rew_to_dsp8000.py send --dry-run      # visa vad som skulle skickas
     python rew_to_dsp8000.py send                # skicka på riktigt (frågar först)
@@ -65,11 +71,10 @@ def monitor(seconds=30):
     fader eller tryck + på SND MEMORY DUMP. Kräver DSP8000 OUT -> interface IN,
     EXCL SND ON, och BÅDA MIDI-kablarna inkopplade (verifierat 2026-09-02).
 
-    OBS: SND MEMORY DUMP ger 100 program x 121 byte BIT-PACKAT / proprietärt -
-    se midi_captures.txt och syx_tools.py. Fader-rörelse ger en läsbar 64-byte
-    GEQ-status (64 = 0 dB) som skrivs ut i dB här. En SysEx-forfragan
-    (`sysex`-kommandot) triggar samma packade dump. Verifiera hellre
-    skrivningar med en REW-sweep."""
+    SND MEMORY DUMP ger den bit-packade 12110-byte-dumpen (avkodas med
+    syx_tools.py, layout i docs/midi.md). Fader-rörelse ger en läsbar 64-byte
+    GEQ-status (64 = 0 dB) som skrivs ut i dB här. En SysEx-förfrågan
+    (`sysex`/`readback`) triggar samma dump utan fader-nudge."""
     n = 0
     with open_input() as inp:
         for _ in inp.iter_pending():
@@ -235,6 +240,44 @@ def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
     _report_dump_diff(before, after)
 
 
+def push(path):
+    """Skicka en sparad minnesdump (F0 … 4F … F7) tillbaka till enheten - testet
+    av RCV MEMORY DUMP (docs/midi.md avsnitt 4). Dumpar före och efter och
+    diffar, så du ser om enheten tog emot något. Före-dumpen sparas alltid som
+    återställningspunkt. KAN SKRIVA ÖVER enhetens minne (arbetsbuffert + 100
+    program) - använd bara dumpar från samma enhet."""
+    b = syx_tools.load(path)
+    if not syx_tools.is_memory_dump(b):
+        raise SystemExit(f"{path}: inte en minnesdump (F0 00 20 32 00 01 4F …).")
+    print(f"{path}: {len(b)} byte, sub-kod {b[6]:02x} {b[7]:02x}. "
+          "Det här kan SKRIVA ÖVER enhetens minne.")
+    if input("Skicka till enheten? (ja/nej): ").strip().lower() != "ja":
+        raise SystemExit("Avbrutet.")
+    ts = time.strftime("%H%M%S")
+    before_f = Path(f"probe_push_before_{ts}.syx")
+    with open_output() as out, open_input() as inp:
+        print("Dump 1/2 (före)...")
+        before = grab_dump(out, inp)
+        if before is None:
+            raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
+                             "enheten på EQ-huvudskärmen.")
+        before_f.write_bytes(b"\xf0" + before + b"\xf7")
+        print(f"  återställningspunkt: {before_f}  (push den om något gick fel)")
+        input("  Testa knappvägen? Tryck + på RCV MEMORY DUMP på enheten nu, "
+              "annars inte. Enter skickar: ")
+        out.send(mido.Message("sysex", data=list(b[1:-1])))
+        time.sleep(6)   # 12 kB @ 31250 baud ≈ 4 s + marginal
+        print("Dump 2/2 (efter)...")
+        after = grab_dump(out, inp)
+    if after is None:
+        raise SystemExit("Andra dumpen kom inte - enheten står kanske kvar i "
+                         "mottagningsläge eller bytte skärm. Kolla displayen.")
+    Path(f"probe_push_after_{ts}.syx").write_bytes(b"\xf0" + after + b"\xf7")
+    _report_dump_diff(before, after)
+    print("\nKolla också displayen: ändrades GEQ/PEQ där? (docs/midi.md avsnitt 4, "
+          "frågorna 1-6)")
+
+
 def _geq_from_dump(payload):
     return syx_tools.decode_geq(b"\xf0" + payload + b"\xf7")
 
@@ -258,7 +301,7 @@ def readback():
 
 
 def sysex_probe(write_test=False):
-    """Fråga enheten via SysEx. Se dsp8000_midi_webbresearch.md avsnitt 6/10.
+    """Fråga enheten via SysEx. Se docs/midi.md avsnitt 6 och bilaga A.
 
     Resultat 2026-09-02: DSP8000 svarar bara på modellbyte 0x01, och bara med
     HELA minnesdumpen (~12110 byte) oavsett vilken 70-förfrågan man skickar.
@@ -417,6 +460,7 @@ def main():
     sub.add_parser("sysex").add_argument("--write-test", action="store_true")
     sub.add_parser("readback")
     sub.add_parser("grab").add_argument("path", help="filnamn att spara dumpen som")
+    sub.add_parser("push").add_argument("path", help="minnesdump (.syx) att skicka till enheten")
     pb = sub.add_parser("probe")
     pb.add_argument("--band", type=float, default=1000)
     pb.add_argument("--value", type=int, default=127, metavar="CC-0-127")
@@ -456,6 +500,8 @@ def main():
         readback()
     elif args.cmd == "grab":
         grab(args.path)
+    elif args.cmd == "push":
+        push(args.path)
     elif args.cmd == "probe":
         probe_band(args.band, args.value, args.channel, args.midi_channel,
                    restore=None if args.no_restore else 64, manual=args.manual)

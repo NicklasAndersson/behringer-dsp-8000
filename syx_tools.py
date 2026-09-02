@@ -1,6 +1,7 @@
 """
 Hjälpverktyg för DSP8000:s SysEx-dumpar (.syx från `rew_to_dsp8000.py
-monitor`/`sysex`/`probe`/`grab`). Ren stdlib, ingen MIDI.
+monitor`/`sysex`/`probe`/`grab`/`push`, referensdumpar i dumps/). Ren stdlib,
+ingen MIDI. Dump-layouten i detalj: docs/midi.md avsnitt 6.
 
     python syx_tools.py hex  dump.syx [--start 0 --length 256]
     python syx_tools.py eq   dump.syx            # 31+31 grafiska band + de 6 PEQ-filtren
@@ -85,7 +86,9 @@ def decode_peq(b):
             "freq_hz": 20.0 * 10 ** (fr / 640),
             "bw_oct": (bw + 1) / 60,
             "gain_db": g / 16,
-            "on": bool(fr or bw or g),
+            # ponytail: |gain| < 0,5 dB (ett enhetssteg) med freq/bw 0 = brus, inte ett
+            # filter. 4F 12-dumpar har bit 278 satt även med PEQ OFF (docs/midi.md 6.4).
+            "on": bool(fr or bw or abs(g) >= 8),
         })
     return out
 

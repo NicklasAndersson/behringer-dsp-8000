@@ -6,9 +6,10 @@
   Öppna filen direkt, eller om Web MIDI blockeras från file://:
       python3 -m http.server   ->  http://localhost:8000/dsp8000_gui.html
 
-  Styr det som faktiskt går via MIDI: 31-bands GEQ (L/R), masterfaders,
-  programval. PEQ/delay/gate/limiter/feedback destroyer går inte via MIDI -
-  ställ på enheten, spara som program, hämta här.
+  Styr det som faktiskt går att skriva via MIDI: 31-bands GEQ (L/R),
+  masterfaders, programval. PEQ/delay/gate/limiter/feedback destroyer går inte
+  att skriva via MIDI - ställ på enheten, spara som program, hämta här.
+  MIDI-referens: docs/midi.md.
 -->
 <style>
   :root { color-scheme: light dark; }
@@ -97,8 +98,9 @@
 <p class="note">
   <b>Går inte via MIDI heller:</b> delay, gate, limiter, feedback destroyer,
   Auto-Q, stereolink. Ställ på enheten, spara program, hämta via programval.
-  <br><b>Verifiera</b> alltid med en REW-sweep – enheten rapporterar inte
-  tillbaka sitt tillstånd på ett läsbart sätt.
+  <br>Vad enheten faktiskt tog emot läses tillbaka med
+  <code>rew_to_dsp8000.py readback</code> (GEQ + PEQ ur minnesdumpen, se
+  docs/midi.md). Det <b>akustiska</b> resultatet verifieras med en REW-sweep.
 </p>
 
 <script>

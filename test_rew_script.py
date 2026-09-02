@@ -282,9 +282,12 @@ def test_decode_geq_known_dumps():
     """De committade dumparna har känt GEQ-innehåll: _0db = allt 0 dB,
     _p16db = allt +16 dB. Fångar om bitström-offset/bredd/tecken går sönder."""
     here = Path(__file__).parent
-    zero = syx_tools.decode_geq((here / "dsp8000_sysex_0db.syx").read_bytes())
+    raw0 = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    zero = syx_tools.decode_geq(raw0)
     assert zero["L"] == [0.0] * 31 and zero["R"] == [0.0] * 31, zero
-    mx = syx_tools.decode_geq((here / "dsp8000_sysex_p16db.syx").read_bytes())
+    # 4F 12-dumpen har bit 278 satt (R3 gain raw 1) - ska ändå visas som OFF
+    assert all(not f["on"] for f in syx_tools.decode_peq(raw0)), syx_tools.decode_peq(raw0)
+    mx = syx_tools.decode_geq((here / "dumps" / "dsp8000_sysex_p16db.syx").read_bytes())
     assert mx["L"] == [16.0] * 31 and mx["R"] == [16.0] * 31, mx
 
 
@@ -321,6 +324,39 @@ def test_decode_geq_roundtrips_a_single_band():
         payload[10 + byte] |= bit << off
     g = syx_tools.decode_geq(b"\xf0" + bytes(payload) + b"\xf7")
     assert g["L"][5] == -8.0 and g["L"][4] == 0.0 and g["L"][6] == 0.0, g["L"][:8]
+
+
+def test_run_gui_allowlist_and_streams_help():
+    """Starta panelen på en ledig port, avvisa okänt kommando, kör `help`,
+    se att utskriften strömmas och exit-koden landar."""
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    import run_gui
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), run_gui.Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}"
+
+    def post(path, body):
+        req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST")
+        try:
+            return json.loads(urllib.request.urlopen(req).read())
+        except urllib.error.HTTPError as e:
+            return json.loads(e.read())
+
+    assert "error" in post("/run", {"cmdline": "ls"}), "okänt kommando ska avvisas"
+    assert post("/run", {"cmdline": "help"}) == {"ok": True}
+    run_gui.state["proc"].wait(timeout=10)
+    for _ in range(50):                      # pump-tråden ska hinna skriva exit-raden
+        if run_gui.state["exit"] is not None:
+            break
+        threading.Event().wait(0.05)         # time.sleep är bortpatchad ovan
+    j = json.loads(urllib.request.urlopen(base + "/out?since=0&gen=0").read())
+    assert not j["running"] and j["exit"] == 0, j
+    assert "REW -> DSP8000" in j["text"] and "[klar, exit 0]" in j["text"], j["text"][:200]
+    assert "error" in post("/stdin", {"line": "x"}), "stdin utan process ska ge fel"
+    srv.shutdown()
 
 
 def test_dsp8000_selftest():
