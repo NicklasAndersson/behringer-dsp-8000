@@ -4,8 +4,9 @@ Steg 2: rew_eq_suggestion.json -> MIDI CC till DSP8000:s grafiska EQ.
 Bara den grafiska 31-bands-EQ:n kan fjärrstyras (via CC). De parametriska
 filtren måste ställas för hand - kör show_config.py och läs av dem där.
 
-VIKTIGT: CC->dB-skalan (dsp8000.db_to_cc) är en OKALIBRERAD gissning.
-Kör `calibrate` en gång mot din enhet innan du litar på `send`.
+CC->dB-skalan (dsp8000.db_to_cc, CC = 64 + dB*4) är verifierad mot
+testenheten 2026-09-02. Kör `calibrate` en gång om du har en annan enhet.
+Enhetens CNTL RCV-tal måste vara = dsp8000.CC_OFFSET (0 på testenheten).
 
 Beroenden:
     pip install mido python-rtmidi
@@ -26,7 +27,10 @@ import sys
 import time
 from pathlib import Path
 
-import mido
+try:
+    import mido
+except ImportError:  # fit_scale m.m. är ren matte; bara MIDI-kommandona behöver mido
+    mido = None
 
 import dsp8000
 
@@ -58,11 +62,12 @@ def open_input(hint=PORT_HINT):
 def monitor(seconds=30):
     """Lyssna på vad DSP8000 skickar och spara varje SysEx till fil. Rör en
     fader eller tryck + på SND MEMORY DUMP. Kräver DSP8000 OUT -> interface IN
-    + CNTL/EXCL SND, och (verkar det som) bara EN kabel - båda ihop = MIDI-loop.
+    + CNTL/EXCL SND. Fungerar med båda kablarna i (verifierat 2026-09-02).
 
-    OBS: SND MEMORY DUMP ger 100 program x 121 byte BIT-PACKAT - inte värt att
-    avkoda. Fader-rörelse ger en läsbar 64-byte GEQ-status (64 = 0 dB). Verifiera
-    hellre skrivningar med en REW-sweep."""
+    OBS: SND MEMORY DUMP (~12110 byte) är packad/proprietär - se
+    midi_captures.txt och syx_tools.py. Fader-rörelse ger en läsbar 64-byte
+    GEQ-status (64 = 0 dB) som skrivs ut i dB här. Verifiera hellre
+    skrivningar med en REW-sweep."""
     n = 0
     with open_input() as inp:
         for _ in inp.iter_pending():
@@ -77,12 +82,27 @@ def monitor(seconds=30):
                     out = Path(f"dsp8000_sysex_{len(d)}_{time.strftime('%H%M%S')}.syx")
                     out.write_bytes(b"\xf0" + d + b"\xf7")
                     print(f"  SysEx {len(d)}b -> {out}  (header {list(d[:9])})")
+                    for line in geq_status_lines(d):
+                        print("   ", line)
                 else:
                     print(f"  {m}")
             time.sleep(0.02)
     print(f"\n{n} meddelanden. " +
           ("OK - returvägen funkar." if n else
            "INGET - kolla DSP8000 OUT -> interface IN (inte THRU), CNTL SND / EXCL SND."))
+
+
+def geq_status_lines(data):
+    """Tolka den läsbara GEQ-statusframen (fader-rörelse):
+    00 20 32 00 01 33 09 + 32 byte L + 32 byte R, pos 0-30 = band, 31 = master.
+    -> rader med dB per kanal, tom lista för andra meddelanden."""
+    if len(data) != 7 + 64 or list(data[:7]) != [0, 0x20, 0x32, 0, 1, 0x33, 9]:
+        return []
+    lines = []
+    for name, chunk in (("L", data[7:39]), ("R", data[39:71])):
+        bands = " ".join(f"{dsp8000.cc_to_db(v):+.1f}" for v in chunk[:31])
+        lines.append(f"GEQ {name}: {bands}  master={chunk[31]}")
+    return lines
 
 
 BEHRINGER_ID = [0x00, 0x20, 0x32]
@@ -110,7 +130,7 @@ def _collect(inp, wait_s=8.0, quiet_s=1.0):
     return msgs
 
 
-def sysex_probe(write_test=False, midi_channel=1):
+def sysex_probe(write_test=False):
     """Fråga enheten via SysEx. Se dsp8000_midi_webbresearch.md avsnitt 6/10.
 
     Resultat 2026-09-02: DSP8000 svarar bara på modellbyte 0x01, och bara med
@@ -241,14 +261,16 @@ def calibrate(band_freq=1000, channel="left", midi_channel=1):
 
 
 def main():
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("ports")
     sub.add_parser("monitor").add_argument("--seconds", type=int, default=30)
     sub.add_parser("sysex").add_argument("--write-test", action="store_true")
     for name in ("send", "calibrate"):
         sp = sub.add_parser(name)
-        sp.add_argument("--midi-channel", type=int, default=1)
+        sp.add_argument("--midi-channel", type=int, default=1, choices=range(1, 17),
+                        metavar="1-16")
         if name == "send":
             sp.add_argument("--channel", choices=["left", "right", "both"],
                             default="both")  # Stereolink av -> both
@@ -257,6 +279,9 @@ def main():
             sp.add_argument("--channel", choices=["left", "right"], default="left")
             sp.add_argument("--band", type=float, default=1000)
     args = p.parse_args()
+    if mido is None:
+        raise SystemExit("mido saknas: pip install mido python-rtmidi "
+                         "(eller ./run.sh som installerar requirements.txt).")
 
     if args.cmd == "ports":
         print("out:", mido.get_output_names())

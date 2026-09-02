@@ -5,13 +5,22 @@ Du kör själv sweepen i REW (den vill du göra med koll på nivåer ändå).
 Skriptet kan sedan, via REW:s HTTP-API:
 
   1. sätta equaliser till Generic
-  2. sätta target settings + match target settings (DSP8000-vänliga
-     defaults: 20-300 Hz, försiktig max boost)
+  2. sätta match target settings (DSP8000-vänliga defaults: 20-300 Hz,
+     försiktig max boost) och räkna ut target-nivån
   3. köra "Match target"
   4. läsa ut filterlistan och spara den till rew_eq_suggestion.json
 
 Allt utom sweepen går alltså via API:t - ingen GUI-klickning behövs efter
 mätningen. Verifierat mot REW API 0.9.0 (V5.40 beta 101). Kräver INTE REW Pro.
+
+Målkurvans form (tilt/house curve, LF cutoff) sätts INTE här - ställ in den
+i REW:s Target Settings innan du kör; skriptet räknar bara ut target-nivån.
+
+Andra varvet (--refine): mät om MED EQ:n aktiv och kör
+    python rew_script.py --refine
+så läggs residualen (target - uppmätt) ovanpå förra JSON:ens bandvärden.
+Det är så man konvergerar en grafisk EQ - grannband läcker in i varandra,
+så första varvets (target - respons) överkorrigerar alltid lite.
 
 Beroenden:
     pip install requests
@@ -81,7 +90,22 @@ def pick_measurement_interactively():
     print("Tillgängliga mätningar:")
     for i, m in enumerate(measurements):
         print(f"  [{i}] {m['id']}: {m.get('title', '?')}  ({m.get('date', '')})")
-    return measurements[int(input("Välj mätning (index): "))]
+    last = len(measurements) - 1
+    while True:
+        ans = input(f"Välj mätning (index, enter = {last}): ").strip()
+        if not ans:
+            return measurements[last]
+        if ans.isdigit() and int(ans) <= last:
+            return measurements[int(ans)]
+        print(f"Ange ett tal 0..{last}.")
+
+
+def find_measurement(measurement_id):
+    """Slå upp en mätning på REW-id (nyckeln i GET /measurements)."""
+    for m in list_measurements():
+        if m["id"] == str(measurement_id):
+            return m
+    raise SystemExit(f"Ingen mätning med id {measurement_id} i REW.")
 
 
 EQ_COMMANDS = [
@@ -107,7 +131,7 @@ def eq_command(measurement_id, command):
     if "in progress" not in msg:
         return  # kördes synkront
     process_name = msg.split(" in progress")[0]  # "<command> ID N"
-    for _ in range(120):  # ponytail: 60s tak; höj om match target är trögt
+    for _ in range(120):  # 120 x 0,5 s = 60 s tak; höj om Match target är trögt
         result = api_get("/measurements/process-result")
         if result.get("processName") == process_name:
             if result.get("message") == "Completed":
@@ -118,8 +142,9 @@ def eq_command(measurement_id, command):
 
 
 def run_match_target(measurement_id, peq=True):
-    """Sätt equaliser + target settings, rikta in target-nivån, och (om peq)
-    kör Match target som genererar de parametriska filtren."""
+    """Sätt equaliser + match target settings, rikta in target-nivån, och
+    (om peq) kör Match target som genererar de parametriska filtren.
+    Målkurvans FORM (target-settings/house curve) rörs inte - den ställs i REW."""
     api_post(f"/measurements/{measurement_id}/equaliser",
              {"manufacturer": "Generic", "model": "Generic"})
     api_post("/eq/match-target-settings", MATCH_TARGET_SETTINGS)
@@ -128,35 +153,46 @@ def run_match_target(measurement_id, peq=True):
         eq_command(measurement_id, "Match target")
 
 
+def get_filter_slots(measurement_id):
+    """GET /measurements/{id}/filters: alla platser (Generic/Generic ger 20-22),
+    satta filter har type (PK...), frequency, gaindB, q. "None" = tom plats."""
+    return api_get(f"/measurements/{measurement_id}/filters")
+
+
 def get_filters(measurement_id):
-    """
-    GET /measurements/{id}/filters ger 20 platser; satta filter har
-    type (PK...), frequency, gaindB, q. "None" = tom plats, filtreras bort.
-    """
+    """Bara de satta filtren (tomma platser bortfiltrerade)."""
     return [
-        f for f in api_get(f"/measurements/{measurement_id}/filters")
+        f for f in get_filter_slots(measurement_id)
         if f.get("type") not in (None, "None")
     ]
 
 
 def keep_top_filters(measurement_id, filters, n=dsp8000.PEQ_COUNT):
     """
-    REW:s Match target ger fler filter än DSP8000:s 3 PEQ. Behåll de n med
-    störst |gain|, skriv tillbaka till REW så /eq/frequency-response speglar
-    exakt det som faktiskt hamnar på enheten (annars blir grafiska EQ:n fel).
+    REW:s Match target ger fler filter än DSP8000:s 3 PEQ. Behåll de n
+    peaking-filter (PK) med störst |gain|, skriv tillbaka till REW så
+    /eq/frequency-response speglar exakt det som faktiskt hamnar på enheten
+    (annars blir grafiska EQ:n fel). Shelf-filter (LS/HS) och annat som
+    DSP8000:s PEQ inte kan göra slängs - grafiska EQ:n får ta den delen.
     """
-    if len(filters) <= n:
+    peaking = [f for f in filters if f.get("type") == "PK" and "q" in f]
+    dropped = len(filters) - len(peaking)
+    if dropped:
+        print(f"Hoppar över {dropped} filter som inte är PK (shelf o.dyl.).")
+    if len(peaking) == len(filters) and len(filters) <= n:
         return filters
-    kept = sorted(filters, key=lambda f: abs(f.get("gaindB", 0)), reverse=True)[:n]
+    kept = sorted(peaking, key=lambda f: abs(f.get("gaindB", 0)), reverse=True)[:n]
     kept = sorted(kept, key=lambda f: f.get("frequency", 0))
+    slots = max(len(get_filter_slots(measurement_id)), len(kept))
     body = [
-        {"index": i, "type": f.get("type", "PK"), "enabled": True,
+        {"index": i, "type": "PK", "enabled": True,
          "frequency": f["frequency"], "gaindB": f["gaindB"], "q": f["q"]}
         for i, f in enumerate(kept, 1)
     ]
-    body += [{"index": i, "type": "None"} for i in range(len(kept) + 1, 21)]
+    body += [{"index": i, "type": "None"} for i in range(len(kept) + 1, slots + 1)]
     api_post(f"/measurements/{measurement_id}/filters", {"filters": body})
-    print(f"Behöll {n} av {len(filters)} filter (störst gain), skrev tillbaka till REW.")
+    print(f"Behöll {len(kept)} av {len(filters)} filter (störst gain), "
+          "skrev tillbaka till REW.")
     return get_filters(measurement_id)
 
 
@@ -166,7 +202,12 @@ def _decode_curve(d):
     raw = base64.b64decode(d["magnitude"])
     vals = struct.unpack(f">{len(raw) // 4}f", raw)
     f0, ppo = d["startFreq"], d["ppo"]
-    return [(f0 * 2 ** (i / ppo), v) for i, v in enumerate(vals)]
+    # NaN/inf utanför mätområdet skulle annars krascha median + round()
+    curve = [(f0 * 2 ** (i / ppo), v) for i, v in enumerate(vals)
+             if math.isfinite(v)]
+    if not curve:
+        raise SystemExit("REW gav en tom kurva - är mätningen fullständig?")
+    return curve
 
 
 def _value_at(curve, freq):
@@ -180,7 +221,7 @@ def _value_at(curve, freq):
     return curve[-1][1]
 
 
-def graphic_band_gains(measurement_id, after_peq):
+def graphic_band_gains(measurement_id, after_peq, base=None):
     """
     Grafisk 31-bands-EQ = (target - respons) samplat vid ISO-frekvenserna,
     1/3-oktavs utjämning, centrerat kring median, klippt till enhetens intervall.
@@ -189,6 +230,9 @@ def graphic_band_gains(measurement_id, after_peq):
       True  -> respons = /eq/frequency-response (uppmätt EFTER de parametriska
                filtren), så grafiska EQ:n bara städar upp resten
       False -> respons = /frequency-response (rå uppmätt), grafiska EQ:n gör allt
+
+    base: {frekvens: dB} som redan sitter på enheten (förra varvets JSON).
+    Mätningen är då gjord MED den EQ:n, så residualen adderas ovanpå.
     """
     endpoint = ("eq/frequency-response" if after_peq else "frequency-response")
     meas = _decode_curve(api_get(
@@ -198,10 +242,23 @@ def graphic_band_gains(measurement_id, after_peq):
         f"/measurements/{measurement_id}/target-response?ppo=48&unit=SPL"))
     raw = [_value_at(tgt, f) - _value_at(meas, f) for f in dsp8000.ISO_BANDS]
     mid = sorted(raw)[len(raw) // 2]
+    base = base or {}
     return {
-        f: dsp8000.clamp_band_gain(g - mid)
+        f: dsp8000.clamp_band_gain(g - mid + base.get(f, 0.0))
         for f, g in zip(dsp8000.ISO_BANDS, raw)
     }
+
+
+def load_previous_output(path=OUTPUT_FILE):
+    """Förra varvets JSON -> (peq_filters, {frekvens: dB}) för --refine."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"--refine kräver ett tidigare {path} (kör utan --refine först).")
+    gains = data.get("graphic_band_gains_db", {})
+    return (data.get("peq_filters", []),
+            {f: float(gains[str(f)]) for f in dsp8000.ISO_BANDS if str(f) in gains})
 
 
 def save_output(measurement, filters, band_gains, path=OUTPUT_FILE):
@@ -220,13 +277,33 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--no-peq", action="store_true",
                     help="hoppa över de parametriska filtren, bara 31-bands grafisk EQ")
+    ap.add_argument("--refine", action="store_true",
+                    help="andra varvet: mätning gjord MED EQ:n på, addera residualen "
+                         f"till bandvärdena i {OUTPUT_FILE} (PEQ-listan följer med)")
+    ap.add_argument("--measurement", metavar="ID",
+                    help="REW:s mätnings-id (nyckeln i GET /measurements) i stället för att fråga")
+    ap.add_argument("--yes", "-y", action="store_true",
+                    help="fråga inte, kör Match target via API direkt")
     args = ap.parse_args()
 
     check_api_alive()
-    measurement = pick_measurement_interactively()
+    measurement = (find_measurement(args.measurement) if args.measurement
+                   else pick_measurement_interactively())
     measurement_id = measurement["id"]
 
-    if input("Kör Match target via API nu? (j/n): ").strip().lower().startswith("j"):
+    if args.refine:
+        # Enhetens EQ (grafisk + ev. PEQ) sitter redan i mätningen: räkna
+        # residualen mot rå respons och lägg den ovanpå förra bandvärdena.
+        prev_filters, base = load_previous_output()
+        print(f"Refine: utgår från {len(base)} band + {len(prev_filters)} PEQ i {OUTPUT_FILE}.")
+        api_post(f"/measurements/{measurement_id}/equaliser",
+                 {"manufacturer": "Generic", "model": "Generic"})
+        eq_command(measurement_id, "Calculate target level")
+        save_output(measurement, prev_filters,
+                    graphic_band_gains(measurement_id, after_peq=False, base=base))
+        return
+
+    if args.yes or input("Kör Match target via API nu? (j/n): ").strip().lower().startswith("j"):
         run_match_target(measurement_id, peq=not args.no_peq)
     elif not args.no_peq:
         print("Antar att du redan kört Match target i REW.")

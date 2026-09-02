@@ -14,8 +14,7 @@ inte `pip install` globalt (PEP 668), så kör i en virtuell miljö:
 cd ~/dev/ljud
 python3 -m venv .venv
 source .venv/bin/activate          # varje ny terminal
-pip install requests               # steg 1
-pip install requests mido python-rtmidi   # steg 2 (när det finns)
+pip install -r requirements.txt    # requests (steg 1) + mido/python-rtmidi (steg 2)
 ```
 
 Kör skriptet:
@@ -29,7 +28,10 @@ python rew_script.py               # med .venv aktiverad
 Eller allt på en gång (skapar venv, installerar, kör):
 
 ```sh
-./run.sh              # flaggor skickas vidare, t.ex. ./run.sh --no-peq
+./run.sh                    # = rew_script.py, flaggor skickas vidare (--no-peq, --refine …)
+./run.sh send --dry-run     # = rew_to_dsp8000.py send --dry-run (ports/monitor/sysex/calibrate också)
+./run.sh show               # = show_config.py
+./run.sh test               # = test_rew_script.py (kräver varken REW eller enheten)
 ```
 
 **Krav innan steg 1 fungerar:**
@@ -242,7 +244,7 @@ justerar DSP8000:s band live och ser resultatet i realtid.
 |---|---|
 | Program Change (0–99) | **fungerar** |
 | CC → grafisk EQ | **fungerar** — `CC 17 = 96` gav `L: +8 dB` på 1 kHz |
-| SysEx: enheten skickar full dump | sett (fader‑rörelse) men returvägen krånglar nu, ej återupptagen |
+| SysEx: enheten skickar full dump | **fungerar** — vid fader‑rörelse, `SND MEMORY DUMP` eller på förfrågan (se Returväg nedan) |
 
 ### CC-mappning (bekräftad, offset 0)
 
@@ -275,11 +277,16 @@ Fungerar (`rew_to_dsp8000.py monitor`) med **båda kablarna inkopplade**
   Praktisk vinst: dumpen kan hämtas **utan fader‑nudge**.
 - `SND MEMORY DUMP` = 10‑byte header (`00 20 32 00 01 4F 12 00 20 00`) +
   working buffer + 100 program × 121 byte. **GEQ‑formatet delvis knäckt**
-  (diff `dsp8000_sysex_min.syx` vs `..._max.syx`): varje band = 8 byte,
-  7 st med bitvikter `64,32,16,8,4,2,1` + 1 separator; bandvärde = summan,
-  0–127, skala `(dB+16)×4`. Bara 9 band skiljde mellan exporterna →
-  **överföringsbuggen är stor**. Full blocklayout kräver en capture till
+  (`python syx_tools.py diff dsp8000_sysex_0db.syx dsp8000_sysex_p16db.syx`):
+  varje band = 8 byte, 7 st med bitvikter `64,32,16,8,4,2,1` + 1 separator;
+  bandvärde = summan, 0–127, skala `(dB+16)×4`. Bara 9–10 grupper (offset
+  61–135) skiljde mellan exporterna → **överföringsbuggen var stor** (GUI:t
+  skickar nu alla band med mellanrum). Full blocklayout kräver en capture till
   (alla 31 band max, sparat till ett program, sedan dump).
+  **OBS om de sparade filerna:** `dsp8000_sysex_m16db.syx` och
+  `dsp8000_sysex_p16db.syx` är byte‑identiska, och `dsp8000_sysex_0db.syx` har
+  nollor i alla grupper — filnamnen stämmer alltså inte med innehållet (en av
+  ±16‑captures gick inte igenom). Gör om captures innan mer analys.
 - Fader‑rörelse ger en **läsbar** 64‑byte GEQ‑status:
   `F0 00 20 32 00 01 33 09 <32 vä> <32 hö> F7`, position 0–30 = band,
   31 = master, `64` = 0 dB. Kräver en fader‑nudge för hand.
@@ -299,6 +306,9 @@ Reservväg: ställ in PEQ för hand → spara program → Program Change.
   MIDI implementation chart (Tab 7.1/7.2), tre olika MIDI-OS-nivåer, och
   ADRStudio:s reverse-engineerade SysEx-protokoll för DSP8024. Testat mot
   vår enhet: DSP8024-protokollet fungerar **inte** här (se Returväg ovan).
+- `docs/keiths-blog-dsp8024-firmware-upgrade.html` — sparad kopia (Wayback)
+  av Keith Neufelds blogg om DSP8024: Auto‑Q‑arbetsgång, brus/pop‑problem,
+  firmware 1.1→1.3 via ny 27C256‑EPROM (gäller **DSP8024**, inte DSP8000).
 
 ---
 
@@ -311,19 +321,23 @@ Reservväg: ställ in PEQ för hand → spara program → Program Change.
 | `show_config.py` | JSON → `dsp8000_config.html`, visar vad som ska ställas in | klar |
 | `rew_to_dsp8000.py` | skickar de 31 banden som MIDI CC + monitor/kalibrering | CC-vägen verifierad |
 | `dsp8000_gui.html` | manuell EQ-kontroll i webbläsaren (Web MIDI), utan REW | klar |
+| `syx_tools.py` | hexdump/diff/GEQ-tolkning av `.syx`-dumpar (stdlib) | verktyg för nästa capture-omgång |
+| `test_rew_script.py` | självtester utan REW/enhet (`./run.sh test`) | klar |
 
 ### Steg 1: `rew_script.py`
 Kräver **inte** REW Pro. Du kör själv sweepen i REW (vill du göra med koll
 på nivåer ändå). Sedan:
 
-1. välj mätning i listan
-2. skriptet sätter equaliser → Generic, target settings + match target
-   settings (`20–300 Hz`, `individualMaxBoost 3 dB`, `overallMaxBoost 0 dB`),
-   kör `Calculate target level` + `Match target` — allt via API
-3. läser ut de parametriska filtren, **behåller de 3 med störst |gain|**
-   (`dsp8000.PEQ_COUNT`) och skriver tillbaka dem till REW — DSP8000 har bara
-   3 PEQ, och `/eq/frequency-response` måste spegla exakt det som hamnar på
-   enheten
+1. välj mätning i listan (eller `--measurement ID`; `--yes` hoppar över frågan)
+2. skriptet sätter equaliser → Generic och match target settings
+   (`20–300 Hz`, `individualMaxBoost 3 dB`, `overallMaxBoost 0 dB`), kör
+   `Calculate target level` + `Match target` — allt via API. **Målkurvans
+   form** (tilt/house curve/LF cutoff, avsnitt 5) sätts *inte* av skriptet —
+   ställ in den i REW:s Target Settings innan
+3. läser ut de parametriska filtren, **behåller de 3 PK‑filter med störst
+   |gain|** (`dsp8000.PEQ_COUNT`; shelf‑filter kastas, de kan inte göras på
+   enheten) och skriver tillbaka dem till REW — DSP8000 har bara 3 PEQ, och
+   `/eq/frequency-response` måste spegla exakt det som hamnar på enheten
 4. beräknar 31 grafiska bandvärden: `(target − respons)` med 1/3-oktavs
    utjämning vid ISO-frekvenserna, centrerat kring median, klippt till
    `SAFE_BOOST_DB` (+3) upp / −12 ner
@@ -340,12 +354,20 @@ matchningen i REW:s GUI.
 `--no-peq`: hoppa över de parametriska filtren helt, bara 31-bands grafisk EQ
 (kör `Calculate target level` men inte `Match target`). `peq_filters` blir tom.
 
+`--refine` (**andra varvet**): mät om *med* EQ:n aktiv (LED tänd), välj den
+nya mätningen och kör `rew_script.py --refine`. Residualen (target − uppmätt,
+mot rå `/frequency-response`) adderas ovanpå bandvärdena i befintlig
+`rew_eq_suggestion.json`; PEQ‑listan följer med oförändrad. Grannband i en
+1/3‑oktavs‑EQ läcker in i varandra, så första varvets (target − respons)
+överkorrigerar alltid lite — ett eller två refine‑varv är hur man konvergerar.
+
 Beroenden: `pip install requests`
 
 ### Steg 1b: `show_config.py`
-Läser `rew_eq_suggestion.json`, skriver `dsp8000_config.html` och öppnar
-den. Tabell över de 31 banden (målförstärkning, stapel, CC-nummer per
-kanal, okalibrerat CC-värde) + de ≤3 parametriska filtren. Ren stdlib —
+Läser `rew_eq_suggestion.json`, skriver `dsp8000_config.html` (genererad,
+gitignorerad) och öppnar den. Tabell över de 31 banden (målförstärkning,
+stapel ±16 dB, CC-nummer per kanal, CC-värde) + de ≤3 parametriska filtren
+med Q **och** bandbredd i oktaver (det är oktaver enheten vill ha). Ren stdlib —
 ingen GUI-toolkit (Homebrews python 3.14 har inte tkinter, och en
 HTML-sida räcker för att bara visa värden). `--no-open` hoppar över
 webbläsaren.
@@ -395,7 +417,8 @@ Läser `rew_eq_suggestion.json` och skickar de 31 bandvärdena som MIDI CC.
 | Kommando | Gör |
 |---|---|
 | `python rew_to_dsp8000.py ports` | listar MIDI-portar |
-| `python rew_to_dsp8000.py monitor` | lyssnar på vad DSP8000 skickar (retur­väg) |
+| `python rew_to_dsp8000.py monitor` | lyssnar på vad DSP8000 skickar (retur­väg); fader-framen skrivs ut i dB |
+| `python rew_to_dsp8000.py sysex [--write-test]` | skickar dump-förfrågan via SysEx, sparar svaret som `.syx` |
 | `python rew_to_dsp8000.py calibrate [--band 1000]` | verifierar `db_to_cc` mot displayen |
 | `python rew_to_dsp8000.py send --dry-run` | visar alla CC utan att skicka |
 | `python rew_to_dsp8000.py send [--channel left\|right\|both] [--midi-channel N]` | skickar (frågar "ja" först) |
@@ -412,7 +435,8 @@ Före skarp körning:
 - verifiera resultatet med en REW-sweep, inte via returvägen (den packade
   dumpen är inte avkodad — se avsnitt 6)
 
-Beroenden: `pip install mido python-rtmidi` (funkade direkt på python 3.14)
+Beroenden: `pip install mido python-rtmidi` (funkade direkt på python 3.14).
+Utan mido går fortfarande `test_rew_script.py` att köra.
 
 ### Manuell kontroll utan REW: `dsp8000_gui.html`
 Öppna filen i **Chrome/Edge** (Web MIDI). Blockeras den från `file://`:
@@ -437,13 +461,16 @@ Reglagen sparas i `localStorage` — överlever refresh, skickas inte automatisk
 
 ### Rekommenderad ordning att köra i
 
-1. Kör en sweep i REW → kör `rew_script.py` → `rew_eq_suggestion.json`
+1. Kör en sweep i REW (bypass, LED släckt) → kör `rew_script.py` → `rew_eq_suggestion.json`
 2. Kör `show_config.py` → se vad som ska ställas in
-3. Kalibrera CC→dB mot enheten (`calibrate()` i steg 2), en gång
+3. (Annan enhet än testenheten? Kör `rew_to_dsp8000.py calibrate` en gång
+   och kolla att `CC = 64 + dB×4` stämmer och att `CC_OFFSET` = `CNTL RCV`.)
 4. Kör steg 2 → skriv de 31 banden till DSP8000 via MIDI
 5. Ställ in de parametriska filtren för hand, spara som program
-6. Verifiera med en ny REW-sweep (enheten kan inte bekräfta sig själv
-   via MIDI)
+6. Verifiera med en ny REW-sweep (LED tänd) — enheten kan inte bekräfta sig
+   själv via MIDI
+7. Kör `rew_script.py --refine` på den nya mätningen → skicka igen (steg 4)
+   → mät igen. Ett–två varv räcker normalt.
 
 ---
 
@@ -454,7 +481,8 @@ Reglagen sparas i `localStorage` — överlever refresh, skickas inte automatisk
 - Parametrisk EQ kan inte fjärrstyras (bara programbyten) — ställ för hand
 - MIDI CC→dB **verifierat**: `CC = 64 + dB×4`. `CC_OFFSET` måste matcha
   enhetens `CNTL RCV`‑tal
-- Returväg verkar kräva **bara en MIDI‑kabel** — sänd+retur ihop = tyst
+- Returväg fungerar med **båda** MIDI‑kablarna i (verifierat 2026‑09‑02);
+  enheten ekar inte CC‑mottagning, bara fader‑rörelse/dump/förfrågan
 - Hela EQ-kedjan (target settings + Match target + läsa filter) går via
   REW:s API, verifierad mot 0.9.0 — kräver **inte** REW Pro
 - Bara **sweepen** körs manuellt i GUI:t (medvetet — nivåer)
@@ -463,3 +491,7 @@ Reglagen sparas i `localStorage` — överlever refresh, skickas inte automatisk
 - De 31 bandvärdena bygger på en **enpunktsmätning** — boost kapas till
   +3 dB (`dsp8000.SAFE_BOOST_DB`) med flit, fyll aldrig upp nullor. Mät
   på fler positioner och medelvärdesbilda i REW innan matchningen
+- Bandvärdena räknas **band för band** utan modell av hur enhetens
+  1/3‑oktavsfilter överlappar — därför överkorrigerar första varvet, och
+  därför finns `--refine` (mät med EQ:n på, addera residualen)
+- Masterfaderns CC‑skala är **inte verifierad** (troligen samma som banden)

@@ -1,0 +1,5 @@
+# Steg 1 (rew_script.py, show_config.py, test_rew_script.py)
+requests
+# Steg 2 (rew_to_dsp8000.py) - MIDI
+mido
+python-rtmidi

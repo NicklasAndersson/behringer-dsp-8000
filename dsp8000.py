@@ -6,8 +6,12 @@ API:t väljer bara {manufacturer, model}). Så vi modellerar enheten här och
 mappar REW:s korrigeringskurva mot den själva.
 
 Verifiera mot din egen enhets manual innan skarp körning - siffrorna kan
-skilja mellan manualversioner, och MIDI CC->dB-skalan är okalibrerad.
+skilja mellan manualversioner. CC->dB-skalan är verifierad mot testenheten
+2026-09-02 (CC = 64 + dB*4); kör `rew_to_dsp8000.py calibrate` om din enhet
+beter sig annorlunda.
 """
+
+import math
 
 # 31 ISO-tersband, 20 Hz - 20 kHz (grafisk EQ per kanal)
 ISO_BANDS = [
@@ -56,6 +60,17 @@ def db_to_cc(db):
     return max(0, min(127, round(64 + db * 4)))
 
 
+def cc_to_db(cc):
+    """Inversen: CC-värde -> dB (64 = 0 dB, 0,25 dB/steg). Används för att
+    läsa av den 64-byte GEQ-statusframe enheten skickar vid fader-rörelse."""
+    return (cc - 64) / 4
+
+
+def q_to_octaves(q):
+    """Q -> bandbredd i oktaver. REW anger PEQ i Q, DSP8000 i oktaver."""
+    return 2 * math.asinh(1 / (2 * q)) / math.log(2)
+
+
 if __name__ == "__main__":
     assert len(ISO_BANDS) == 31
     assert CC_GRAPHIC_LEFT[20] == 0 and CC_GRAPHIC_LEFT[1000] == 17
@@ -66,4 +81,7 @@ if __name__ == "__main__":
     assert clamp_band_gain(-99) == -16.0
     assert db_to_cc(0) == 64 and db_to_cc(8) == 96  # 8 dB verifierat mot enheten
     assert db_to_cc(-16) == 0 and db_to_cc(16) == 127
+    assert cc_to_db(64) == 0 and cc_to_db(96) == 8 and cc_to_db(0) == -16
+    assert abs(q_to_octaves(4.32) - 1 / 3) < 0.01   # 1/3-oktav <=> Q 4,32
+    assert abs(q_to_octaves(1.414) - 1.0) < 0.01     # 1 oktav <=> Q 1,41
     print("dsp8000: självtest ok")

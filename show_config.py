@@ -29,6 +29,7 @@ def bar(db, scale=dsp8000.GRAPHIC_MAX_BOOST_DB):
 
 
 def render(data):
+    scale = dsp8000.GRAPHIC_MAX_BOOST_DB
     m = data.get("measurement", {})
     bands = data.get("graphic_band_gains_db", {})
     peqs = sorted(data.get("peq_filters", []),
@@ -49,10 +50,12 @@ def render(data):
 
     peq_rows = []
     for i, f in enumerate(peqs[:dsp8000.PEQ_COUNT], 1):
+        q = f.get("q") or 0
+        octaves = f"{dsp8000.q_to_octaves(q):.2f} okt" if q > 0 else "–"
         peq_rows.append(
             f"<tr><td>{i}</td><td>{f.get('frequency', 0):.0f} Hz</td>"
             f"<td>{f.get('gaindB', 0):+.1f} dB</td>"
-            f"<td>{f.get('q', 0):.2f}</td></tr>"
+            f"<td>{q:.2f}</td><td>{octaves}</td></tr>"
         )
     extra = len(peqs) - dsp8000.PEQ_COUNT
     peq_note = (f"<p class='warn'>REW föreslog {len(peqs)} filter, "
@@ -84,21 +87,22 @@ def render(data):
  ({html.escape(str(m.get('date', '')))}) · genererad {html.escape(str(data.get('generated_at', '')))}</p>
 
 <h2>Grafisk EQ (31 band, per kanal)</h2>
-<p class="meta">Kolumnerna: målförstärkning · CC-nummer (vänster/höger kanal) ·
- CC-värde att skicka (<b>okalibrerad</b> gissning, se readme).</p>
+<p class="meta">Kolumnerna: målförstärkning · CC-nummer (vänster/höger kanal,
+ offset {dsp8000.CC_OFFSET}) · CC-värde att skicka (CC = 64 + dB×4, verifierat).</p>
 <table>
- <tr><th>Band</th><th class="g">Gain</th><th>–12 ····· 0 ····· +12</th><th>CC #</th><th>CC-värde</th></tr>
+ <tr><th>Band</th><th class="g">Gain</th><th>–{scale:.0f} ····· 0 ····· +{scale:.0f}</th><th>CC #</th><th>CC-värde</th></tr>
  {''.join(rows)}
 </table>
 
 <h2>Parametriska filter (max {dsp8000.PEQ_COUNT}, för rumsmoder)</h2>
 {peq_note}
 <table>
- <tr><th>#</th><th>Frekvens</th><th>Gain</th><th>Q</th></tr>
- {''.join(peq_rows) or '<tr><td colspan=4 class=meta>inga</td></tr>'}
+ <tr><th>#</th><th>Frekvens</th><th>Gain</th><th>Q</th><th>≈ bandbredd</th></tr>
+ {''.join(peq_rows) or '<tr><td colspan=5 class=meta>inga</td></tr>'}
 </table>
 <p class="meta">Parametriska filter kan inte fjärrstyras via MIDI på
- grundmodellen – ställ in dem för hand och spara som program.</p>
+ grundmodellen – ställ in dem för hand (DSP8000 anger bandbredd i oktaver,
+ gain i 0,5 dB-steg) på <b>både L och R</b> och spara som program.</p>
 """
 
 

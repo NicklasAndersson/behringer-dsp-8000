@@ -90,3 +90,20 @@ Då har det programmets block alla 62 band + master på känt värde -> mappa al
 - LÄSA EQ: dumpens GEQ-format är avkodningsbart (8 byte/band, se ovan) men
   hela blocklayouten behöver en till capture (all-max sparad till program).
 - VERIFIERA: kör en REW-sweep.
+
+== 2026-09-02 (granskning): de committade .syx-filerna ==
+Repot innehåller dsp8000_sysex_0db.syx, _m16db.syx, _p16db.syx, _ondemand.syx.
+Filerna som texten ovan hänvisar till (_min/_max, _12110_0844) finns INTE.
+Kontroll med `python syx_tools.py diff`:
+  * _m16db och _p16db är BYTE-IDENTISKA -> en av ±16-captures fångade inte
+    ändringen (eller döptes fel). Innehållet = "max-filen" ovan
+    ([15,127,127,127,126,127,127,127,127,112] i grupperna vid offset 61..133).
+  * _0db har 0 i alla grupper = "nollor/min-filen" ovan. Om faderna verkligen
+    stod på 0 dB när den togs stämmer inte skalan (dB+16)*4 för dumpen, utan
+    det är samma tolkning som "-16 dB (fader i botten)" som gäller. Oklart.
+  * _ondemand (4F 0A) skiljer från _0db (4F 12) i 84 byte, offset 7..218,
+    programblocken från 219 är lika.
+  * signaturen "2 9 84 104 0 23 64 6 16" upprepas vid offset 50 och 210
+    (delta 160, INTE 121) -> "100 x 121 byte"-hypotesen är inte bekräftad.
+Nästa capture-omgång (alla 31 band på känt värde, sparat till program, dump)
+görs bäst med syx_tools.py diff mellan två filer där bara EN sak ändrats.

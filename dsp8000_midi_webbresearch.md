@@ -448,5 +448,7 @@ Kör `sysex --write-test` om du vill prova ADRStudio:s `10 sr xx`-skrivning
   DSP8024", "behringer ultra curve dsp8000 vs"), audiosex.pro,
   Audiofanzine (fransk + engelsk), hometheatershack, Keith Neufeld's
   Electronics Blog ("Installing a Behringer DSP8024 Equalizer and Upgrading
-  Firmware", `neufeld.newton.ks.us/electronics/?p=575` – var otillgänglig
-  vid sökningen).
+  Firmware", `neufeld.newton.ks.us/electronics/?p=575` – sparad Wayback-kopia
+  i `docs/keiths-blog-dsp8024-firmware-upgrade.html`: DSP8024-firmware
+  1.1→1.3 låg som EPROM-image (27C256) på behringer.com; Auto-Q-arbetsgång;
+  hiss + kraftig pop vid på/avslag – slå på EQ:n före slutsteget).

@@ -71,7 +71,8 @@
     <input id="mR" type="range" orient min="0" max="127" value="64">
     <span>Master R <b id="mRv">64</b></span>
   </div>
-  <span class="note">Masterfaderns dB-skala är okänd (0–127 rått, 64 = mitten).</span>
+  <span class="note">Masterfader: 0–127 rått, 64 = mitten. Manualen anger −16…+16 dB
+    i 0,5 dB-steg, så troligen samma skala som banden (CC = 64 + dB×4) – ej verifierat.</span>
 </div>
 
 <div id="prog">
@@ -112,9 +113,10 @@ const dbToCc = db => Math.max(0, Math.min(127, Math.round(64 + db * 4)));
 const ccBand = (i, chan) => (+$('offset').value) + (chan === 'R' ? 32 : 0) + i;
 const ccMaster = chan => (+$('offset').value) + (chan === 'R' ? 63 : 31);
 
+const midiCh = () => Math.max(0, Math.min(15, ($('ch').value | 0) - 1));
 function sendCC(cc, val, when) {
   if (!out) return;
-  const msg = [0xB0 | (($('ch').value | 0) - 1), cc & 127, val & 127];
+  const msg = [0xB0 | midiCh(), cc & 127, val & 127];
   when ? out.send(msg, when) : out.send(msg);
 }
 function sendBand(i, db, when) {
@@ -152,9 +154,8 @@ function sendAll() {
 $('sendall').onclick = sendAll;
 
 $('zero').onclick = () => {
-  BANDS.forEach((_, i) => {
-    $('s'+i).value = 0; $('d'+i).textContent = '0.0'; sendBand(i, 0);
-  });
+  BANDS.forEach((_, i) => { $('s'+i).value = 0; $('d'+i).textContent = '0.0'; });
+  sendAll();   // schemalagt med mellanrum - 62 CC i en klump tappas av enheten
   save();
 };
 
@@ -167,7 +168,7 @@ $('mR').addEventListener('input', e => {
 
 $('progget').onclick = () => {
   if (!out) return;
-  out.send([0xC0 | (($('ch').value | 0) - 1), (+$('progn').value) & 127]);
+  out.send([0xC0 | midiCh(), Math.max(0, Math.min(99, +$('progn').value))]);
 };
 
 // Q -> bandbredd i oktaver (DSP8000 anger PEQ-bandbredd i oktaver, REW i Q)
@@ -194,11 +195,13 @@ $('file').addEventListener('change', async e => {
   BANDS.forEach((hz, i) => {
     if (g[hz] == null) return;
     const db = Math.max(-16, Math.min(16, g[hz]));
-    $('s'+i).value = db; $('d'+i).textContent = db.toFixed(1); sendBand(i, db);
+    $('s'+i).value = db; $('d'+i).textContent = db.toFixed(1);
   });
+  sendAll();   // med mellanrum, inte 62 CC i en klump
   peqCache = data.peq_filters || [];
   showPeq(peqCache);
   save();
+  e.target.value = '';   // så samma fil kan laddas om
 });
 
 // Spara/återställ UI-tillstånd (localStorage) - överlever refresh, skickar inget
@@ -225,7 +228,8 @@ function restore() {
   if (st.mR != null) { $('mR').value = st.mR; $('mRv').textContent = st.mR; }
   for (const k of ['mode', 'ch', 'offset', 'progn'])
     if (st[k] != null) $(k).value = st[k];
-  if (st.peq && st.peq.length) showPeq(st.peq);
+  peqCache = st.peq || [];   // annars skrivs PEQ-listan över med [] vid nästa save()
+  if (peqCache.length) showPeq(peqCache);
 }
 document.addEventListener('change', save);
 restore();
