@@ -495,3 +495,47 @@ Reglagen sparas i `localStorage` — överlever refresh, skickas inte automatisk
   1/3‑oktavsfilter överlappar — därför överkorrigerar första varvet, och
   därför finns `--refine` (mät med EQ:n på, addera residualen)
 - Masterfaderns CC‑skala är **inte verifierad** (troligen samma som banden)
+
+---
+
+## 9. Genomgång 2026-09-02: buggar som lagades
+
+Helhetsgranskning av kodbasen. Inget av detta kräver ombyggnad, men värt att
+känna till om du satt egna skript ovanpå någon av filerna.
+
+- `test_rew_script.py` kraschade helt utan `mido` installerat, eftersom
+  `rew_to_dsp8000.py` importerade det på modulnivå. Importen är nu valfri
+  (`mido = None` om den saknas) — MIDI‑kommandona kräver den fortfarande,
+  men testsviten och `fit_scale` gör det inte.
+- `keep_top_filters` (`rew_script.py`) kunde få `KeyError` om REW:s Match
+  target gav ett shelf‑filter (LS/HS saknar `q`), och antog alltid 20
+  filterplatser. Nu behålls bara `PK`‑filter (shelf kan inte göras på
+  DSP8000:s PEQ ändå) och antal platser hämtas från REW.
+- `_decode_curve` kraschade på `NaN`/`inf`‑värden utanför mätningens
+  frekvensområde (median och `round()` går sönder på `NaN`). Sådana punkter
+  filtreras bort innan de används.
+- `dsp8000_gui.html`: PEQ‑tabellen försvann efter en sidladdning eftersom
+  `restore()` inte satte tillbaka `peqCache` — nästa `save()` skrev då över
+  den sparade listan med en tom. "Ladda REW‑JSON" och "Nolla alla band"
+  skickade dessutom 62 CC i en klump utan mellanrum, samma buffertöverbelastning
+  som `midi_captures.txt` redan identifierat för "Skicka alla" (nu åtgärdad
+  där) — båda går nu via samma schemalagda utskick. MIDI‑kanal och
+  programnummer klipps till giltiga intervall (1–16 resp. 0–99).
+- `show_config.py`: stapelrubriken sa `±12` men skalan var faktiskt `±16`
+  (`dsp8000.GRAPHIC_MAX_BOOST_DB`); texten kallade CC‑skalan "okalibrerad"
+  trots att den är verifierad mot enheten (avsnitt 6).
+- Readme motsade sig själv på två ställen: avsnitt 6 säger att returvägen
+  fungerar med båda kablarna i, avsnitt 8 sa tidigare att den kräver bara
+  en. Och steg 1 påstod att skriptet sätter REW:s "target settings"
+  (målkurvans form) — det gör det inte, bara match‑target‑settings
+  (matchningsområde/max boost); formen ställs fortfarande i REW:s GUI.
+- De committade `.syx`‑filerna stämmer inte med anteckningarna i
+  `midi_captures.txt`: `dsp8000_sysex_m16db.syx` och `..._p16db.syx` är
+  byte‑identiska, och `..._0db.syx` har nollor i alla GEQ‑grupper (en av
+  ±16‑captures gick aldrig igenom). Se `syx_tools.py diff` och noteringen
+  i `midi_captures.txt` under "2026-09-02 (granskning)".
+
+Nytt sedan förra versionen: `rew_script.py --refine` (andra varvet, se
+avsnitt 7 och 8), `dsp8000.cc_to_db`/`dsp8000.q_to_octaves`, `syx_tools.py`
+för att analysera `.syx`‑dumpar, `requirements.txt`, samt `run.sh send|show|test`
+som genvägar till `rew_to_dsp8000.py`/`show_config.py`/`test_rew_script.py`.
