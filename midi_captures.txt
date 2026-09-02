@@ -1,0 +1,92 @@
+Råa MIDI-captures från DSP8000 2026-08-31. För att lista ut CC-mappning +
+SysEx-format. Se readme avsnitt 6.
+
+Setup: AudioBox USB, kanal 1. DSP8000 CNTL RCV/SND, PROG RCV, EXCL på.
+Kanalerna var LÄNKADE vid testet (L/R rör sig ihop, inte helt symmetriskt).
+
+== Loopback (AudioBox OUT->IN, bevisar att interfacet funkar) ==
+skickade CC81=0,64,127 -> fick tillbaka exakt samma. OK.
+(en sysex kom också: 7E 7F 0D 70 02 24 7A 61 15 7F 7F 7F 7F 11 ... = MIDI
+ identity/handshake, ej DSP8000)
+
+== Program Change ==
+PC -> 1, 5, 10 : displayen bytte program. FUNGERAR.
+
+== Fader 1 kHz vänster, svep ner->upp ==
+CC ch1 17 : 59 meddelanden, värden 0..66     <- MSB
+CC ch1 49 : 59 meddelanden, värden 32..98    <- LSB (49 = 17 + 32)
+CC ch1 16 : sågs en gång, värde 119
+
+SysEx (header 00 20 32 00 01 33 09, sedan 64 databytes = 32 vä + 32 hö):
+ frame A: vä[17]=23  hö[17]=39
+ frame B: vä[17]=27  hö[17]=43
+ frame C: vä[17]=0   hö[17]=16
+ (vä[17] = 1 kHz vänster, position 17 i 31-bandsarrayen. 64 = 0 dB.)
+
+exempel full frame C, databytes (index 0..63):
+ 64 64 64 64 64 62 64 62 57 37 33 38 34 31 38 29 24 0 44 49 50 47 40 47 38
+ 43 47 56 63 64 64 15 | 64 64 64 64 64 64 64 55 64 64 59 44 44 51 58 57 58
+ 16 51 47 53 52 46 53 60 60 58 62 64 64 64 16
+ (position 31 och 63 = 15 resp 16 = masterfaders? de var inte 64)
+
+== MANUAL (DSP8024 PRO, samma MIDI/GEQ - archive.org + behringer-vintage.com) ==
+Tab 7.2 Controller-Implementation:
+  CC 0-30  = EQ vänster, 20 Hz..20 kHz
+  CC 31    = master level vänster
+  CC 32-62 = EQ höger
+  CC 63    = master level höger
+  + "Controller Offset adjustable from 0 to 64" adderas till alla numren.
+    Readme:s gamla 64-94 = offset 64. Testenheten: offset 0.
+    => CC 17 = 1 kHz vä, CC 49 = 1 kHz hö. Stereolink på => båda skickas.
+GEQ Regelbereich: +16 till -16 dB i 0,5 dB-steg. CC 0-127 linjärt, 64 = 0 dB.
+  => db_to_cc(db, lo=-16, hi=16) stämmer.
+PEQ Regelbereich: +16 till -48 dB i 0,5 dB-steg.
+Program Change: 0-99 (100 program).
+EXCL: "alle Parameter und Funktionen fernbedienbar" (för EQ-Design PC-mjukvara).
+RCV MEMORY DUMP: läser tillbaka en extern dump.
+
+== 2026-09-02: CC-STYRNING BEKRÄFTAD ==
+MIDI-sidan: MIDI ON, CHANNEL 1, OMNI ON, CNTL RCV=0 SND=1, PROG/EXCL RCV+SND ON.
+CNTL-fälten är TAL (Controller Offset 0-64), inte ON/OFF. RCV och SND separata.
+Skickade CC 17 = 96 (kanal 1) -> displayen: L 1 kHz = +8 dB.
+=> CC = 64 + dB*4. Offset 0 för mottagning. db_to_cc uppdaterad.
+
+== 2026-09-02 forts: RETURVÄG ==
+DSP8000 OUT -> AudioBox IN funkar med BÅDA kablarna inkopplade
+(fick 12110-byte dump via SND MEMORY DUMP).
+Enheten ekar INTE på CC-mottagning, bara på fysisk fader-rörelse / explicit dump.
+
+SND MEMORY DUMP-format (dsp8000_sysex_12110.syx sparad som referens):
+  header 10 byte: 00 20 32 00 01 4F 12 00 20 00
+  sedan 100 program x 121 byte. BIT-PACKAT / proprietärt - varken rå eller
+  7->8-uppackning ger rena GEQ-värden. Att avkoda = reverse engineering med
+  många kontrollerade captures. INTE värt det.
+
+Den LÄSBARA varianten (från förra sessionen, fader-rörelse):
+  header 00 20 32 00 01 33 09 + 32 byte L + 32 byte R, 64 = 0 dB,
+  pos 0-30 = band, 31 = master. Den är användbar men kräver fader-nudge.
+
+== 2026-09-02: DIFF nollor vs max (dsp8000_sysex_12110_0844.syx = min/nollor,
+   dsp8000_sysex_12110.syx = max) ==
+Exakt 62 byte skiljer, span offset 63..134 = 72 byte = 9 grupper a 8 byte.
+GEQ-BANDFORMAT KNÄCKT (för läsning):
+  varje band = 8 byte: 7 byte med bitvikter [64,32,16,8,4,2,1] + 1 separator (0).
+  bandvärde = summa av de 7 = 0..127.  max-filen: [15,127,127,127,126,127,127,127,127]
+  skala samma som CC: värde = (dB+16)*4.  0-filen hade dessa = 0 => -16 dB (fader i botten).
+VIKTIGT: bara 9 band ändrades mellan exporterna, inte 31/62.
+  => överföringsbuggen är verklig och stor - de flesta CC:na landade aldrig.
+  ("Skicka alla"-knappen + change-event ska fixa det, ej omtestat)
+
+Dumpens header: 00 20 32 00 01 4F 12 00 20 00, sedan (verkar) working buffer +
+100 program. GEQ ligger tidigt (offset ~60+). Resten av 121-byte-blocket okänt.
+
+FÖR ATT KNÄCKA HELA LAYOUTEN: sätt alla 31 band till max i GUI:t, "Skicka alla",
+verifiera på displayen att ALLA står +16, SPARA till ett programnummer, dumpa.
+Då har det programmets block alla 62 band + master på känt värde -> mappa allt.
+
+== SLUTSATS ==
+- SKRIVA EQ: CC-vägen funkar, kalibrerad (CC = 64 + dB*4), offset 0,
+  båda kanaler (Stereolink av). rew_to_dsp8000.py send. SysEx-skrivning = rabbit hole.
+- LÄSA EQ: dumpens GEQ-format är avkodningsbart (8 byte/band, se ovan) men
+  hela blocklayouten behöver en till capture (all-max sparad till program).
+- VERIFIERA: kör en REW-sweep.

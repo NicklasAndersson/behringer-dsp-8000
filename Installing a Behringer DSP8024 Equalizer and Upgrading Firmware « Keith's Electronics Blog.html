@@ -1,0 +1,1095 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" dir="ltr" lang="en-US" style="--wm-toolbar-height: 69px;"><head profile="http://gmpg.org/xfn/11"><script src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/athena_cI1C.js" type="text/javascript"></script>
+<script type="text/javascript">window.addEventListener('DOMContentLoaded',function(){var v=archive_analytics.values;v.service='wb';v.server_name='wwwb-app218.us.archive.org';v.server_ms=472;archive_analytics.send_pageview({});});</script>
+<script type="text/javascript" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/bundle-playback_cI1C.js" charset="utf-8"></script>
+<script type="text/javascript" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/wombat_cI1C.js" charset="utf-8"></script>
+<script>window.RufflePlayer=window.RufflePlayer||{};window.RufflePlayer.config={"autoplay":"on","unmuteOverlay":"hidden","showSwfDownload":true};</script>
+<script type="text/javascript" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ruffle_cI1C.js"></script>
+<script type="text/javascript">
+    __wm.init("https://web.archive.org/web");
+  __wm.wombat("http://www.neufeld.newton.ks.us/electronics/?p=575","20231207054753","https://web.archive.org/","web","https://web-static.archive.org/_static/",
+	      "1701928073");
+</script>
+<link rel="stylesheet" type="text/css" href="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/banner-styles_cI1C.css">
+<link rel="stylesheet" type="text/css" href="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/iconochive_cI1C.css">
+<!-- End Wayback Rewrite JS Include -->
+
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+<title>Installing a Behringer DSP8024 Equalizer and Upgrading Firmware «  Keith's Electronics Blog</title>
+
+<link rel="stylesheet" href="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/style_cI1C.css" type="text/css" media="screen">
+<link rel="pingback" href="http://www.neufeld.newton.ks.us/electronics/xmlrpc.php">
+
+<style type="text/css" media="screen">
+
+	#page { background: url("https://web.archive.org/web/20231207054753im_/http://www.neufeld.newton.ks.us/electronics/wp-content/themes/default/images/kubrickbgwide.jpg") repeat-y top; border: none; }
+
+</style>
+
+
+<link rel="alternate" type="application/rss+xml" title="Keith's Electronics Blog » Feed" href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?feed=rss2">
+<link rel="alternate" type="application/rss+xml" title="Keith's Electronics Blog » Comments Feed" href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?feed=comments-rss2">
+<link rel="alternate" type="application/rss+xml" title="Keith's Electronics Blog » Installing a Behringer DSP8024 Equalizer and Upgrading Firmware Comments Feed" href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?feed=rss2&amp;p=575">
+<script type="text/javascript" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/l10n_cI1C.js"></script>
+<script type="text/javascript" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/comment-reply_cI1C.js"></script>
+<link rel="EditURI" type="application/rsd+xml" title="RSD" href="http://www.neufeld.newton.ks.us/electronics/xmlrpc.php?rsd">
+<link rel="wlwmanifest" type="application/wlwmanifest+xml" href="http://www.neufeld.newton.ks.us/electronics/wp-includes/wlwmanifest.xml"> 
+<link rel="index" title="Keith's Electronics Blog" href="http://www.neufeld.newton.ks.us/electronics">
+<link rel="start" title="Solid-State Tilt Sensor" href="http://www.neufeld.newton.ks.us/electronics/?p=2">
+<link rel="prev" title="Recommend a Temperature Logger?" href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=591">
+<link rel="next" title="Constant-Current LED String Driver" href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=475">
+<meta name="generator" content="WordPress 3.1.3">
+<link rel="canonical" href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575">
+<style type="text/css">#wpcf fieldset { padding: 10px; border: 1px solid #666666; width: 400px; margin: auto }
+#wpcf legend { font-weight: bold: border: 1px solid #666666; padding: 3px }
+#wpcf label { display: block; float: left; text-align: right; width: 140px; padding-right: 10px; font-size: 100% }
+#wpcf p { margin: 0 0 7px 0 }
+#wpcf .field { font-size: 100%; width: 240px; padding: 0; margin: 0 }
+#wpcf p.button { text-align: right; padding: 0 5px 0 0; }
+#wpcf textarea { font-size: 100%; width: 400px; height: 150px }
+#wpcf .error { background-color: #FFFF00 }
+#wpcf .challenge { font-size: 100%; display: inline-block; display: -moz-inline-stack; text-align: left; width: 240px }
+#wpcf p.alert { color:#FF0000; font-weight: 700; text-align: center; padding: 5px 0 10px 0 }</style></head>
+<body class="single single-post postid-575 single-format-standard"><!-- BEGIN WAYBACK TOOLBAR INSERT -->
+<script>__wm.rw(0);</script>
+<div id="wm-ipp-base" lang="en" style="display: block; direction: ltr; height: 69px;" toolbar-mode="auto">
+</div><div id="wm-ipp-print">The Wayback Machine - https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575</div>
+<script type="text/javascript">//<![CDATA[
+__wm.bt(775,27,25,2,"web","http://www.neufeld.newton.ks.us/electronics/?p=575","20231207054753",1996,"https://web-static.archive.org/_static/",["https://web-static.archive.org/_static/css/banner-styles.css?v=1utQkbB3","https://web-static.archive.org/_static/css/iconochive.css?v=3PDvdIFv"], false);
+  __wm.rw(1);
+//]]></script>
+<!-- END WAYBACK TOOLBAR INSERT -->
+ 
+<div id="page">
+
+
+<div id="header" role="banner">
+	<div id="headerimg">
+		<h1><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/">Keith's Electronics Blog</a></h1>
+		<div class="description"></div>
+	</div>
+</div>
+<hr>
+
+	<div id="content" class="widecolumn" role="main">
+
+	
+		<div class="navigation">
+			<div class="alignleft">« <a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=591" rel="prev">Recommend a Temperature Logger?</a></div>
+			<div class="alignright"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=475" rel="next">Constant-Current LED String Driver</a> »</div>
+		</div>
+
+		<div class="post-575 post type-post status-publish format-standard hentry category-audio category-repairs" id="post-575">
+			<h2>Installing a Behringer DSP8024 Equalizer and Upgrading Firmware</h2>
+
+			<div class="entry">
+				<p>I’m interested in faithful audio reproduction on my home stereo, 
+not just sheer loudness; and even if I don’t end up choosing to stay 
+there, I’ve always wanted to start with a flat frequency response — that
+ is, every pitch that’s played back coming out of the speakers (more to 
+the point, reaching the listener) at the same volume.</p>
+<p>My Sony TA-E9000ES preamp / processor has a white noise generator for
+ calibrating the volume of the surround speakers — it sends “static” to 
+each speaker one at a time going around the room.  Because I can hear a 
+distinct difference in the “color” of the static when it goes from my 
+main front speakers to my center channel, I already assumed that my 
+different speakers are not providing the same reproduction of the signal
+ going into them — which means that at least some of them (and probably 
+all of them) are not delivering a flat playback.</p>
+<p><a href="https://web.archive.org/web/20231207054753/http://www2.neufeld.newton.ks.us/images/electronics/2009/05/23/DSCN4018.jpg"><img src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/DSCN4018_mid_cI1C.jpg" alt="Behringer 8024 digital equalizer"></a></p>
+<p>While poking around on Behringer’s web site, I came across their discontinued <a href="https://web.archive.org/web/20231207054753/http://www.behringer.com/EN/Products/DSP8024.aspx">DSP8024</a>
+ digital equalizer.  It offers thirty-one 1/3-octave bands of graphic 
+equalization from 20Hz to 20kHz — but more importantly, it offers 
+real-time analysis of your audio system.  Connect a reference microphone
+ and turn on auto-equalization and it plays pink noise through your 
+speakers and adjusts the EQ to give you flat response.</p>
+<p>And because it’s discontinued, I figured a used one would be a cheap 
+way to get into real-time analysis and flat frequency response.  Within a
+ week or so I had picked one up on eBay with the <a href="https://web.archive.org/web/20231207054753/http://www.behringer.com/en/products/ecm8000.aspx">ECM8000</a> reference microphone.</p>
+<p>After flattening my room response, the sound coming through my 
+DSP8024 is simultaneously absolutely awful and absolutely glorious.</p>
+<p><span id="more-575"></span></p>
+<h4>Setting It Up</h4>
+<p>Immediately upon putting the EQ inline between my preamp and amp, I 
+noticed a significant hiss coming out of my speakers that’s never been 
+there before.  When I put the EQ into digital bypass, the hiss is still 
+there; only when I power off the EQ to make it engage its physical 
+bypass relays does the hiss disappear.</p>
+<p>Wow.</p>
+<p>Oh, and my amplifiers’ pop-suppression relays do suppress power-on / 
+power-off pops perfectly, but the Behringer EQ manual’s statement that</p>
+<blockquote><p>Fail-safe relays have been incorporated into the design of the BEHRINGER ULTRA-CURVE PRO, which automatically and <strong>silently</strong> <em>[emphasis mine]</em> bypass the unit in the event of power supply disconnection or failure.</p></blockquote>
+<p>is most wildly inaccurate.  DO NOT power on or off the EQ with the downstream amplifier on.  Holy crap; I only did <em>that</em> once.</p>
+<p>So already I wondered whether I had a bad unit, and I hadn’t even started putting music through it yet.</p>
+<p>On to the auto-EQ.</p>
+<p>I find the DSP8024 operating manual to be one of Behringer’s worst; 
+it took me quite a long time to figure out how to turn on the pink noise
+ generator at the proper signal level and get the auto-EQ function 
+started — which you would think would be pretty simple as it’s one of 
+the core functions of the unit.</p>
+<p>The correct order of operations for running auto-equalization — which
+ I’m listing from memory as it would take me literally ten minutes to 
+find all of this scattered randomly throughout the manual even though 
+I’ve read it clear through multiple times — is:</p>
+<ol>
+<li>Reset the entire EQ to (flat) factory defaults, including disabling the advanced functions like feedback suppression.</li>
+<li>Double-check that the EQ is set for flat response.
+<p>This is important because the EQ is in the output path of the pink 
+noise generator and the auto-EQ adaptively disables frequency bands in 
+which it doesn’t “hear” anything (if it can’t hear it, it must be 
+outside your system’s ability to reproduce); so a band that you (or a 
+previous owner) set low might get inadvertently suppressed.</p></li>
+<li>Connect the reference mike and select it as the real-time analysis (RTA) input source.</li>
+<li>Set the AUTO-Q target curve to FLAT.
+<p>The auto-EQ can generate EQ settings to make your room sound like any
+ desired equalization curve; but why target anything other than flat?  
+(That’s a rhetorical question, and I can think of answers that pertain 
+to situations other than my own.)</p></li>
+<li>Put on ear protection and prepare for a physical assault (at least with my system).</li>
+<li>Turn on RTA pink noise generation at -20dB.
+<p>Even though the input gain is set for auto, it seemed as though 
+running with pink noise at -48dB resulted in an EQ curve and master 
+volume set much higher than bypass levels.  Running the RTA with pink 
+noise at -20dB gave me settings that deliver about the same overall 
+sound volume whether the EQ was bypassed or in the loop.  I know this 
+doesn’t make sense and I’m willing to run it again to retest.</p></li>
+<li>Start the auto-EQ, watch the on-screen spectrum analysis slowly 
+flatten out as it figures out your room, and listen to the “color” of 
+the noise changing.</li>
+<li>Shut off the %^#! pink noise.</li>
+<li>The new equalization curve is automatically transferred to the live EQ settings.</li>
+</ol>
+<p>Here’s what it got me:</p>
+<p><a href="https://web.archive.org/web/20231207054753/http://www2.neufeld.newton.ks.us/images/electronics/2009/05/26/DSCN4037.jpg"><img src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/DSCN4037_mid_cI1C.jpg" alt="Equalization curve"></a></p>
+<p>Yow.  Looks like I have some pretty serious room and/or woofer 
+resonance problems in the 80Hz range, and a surprisingly jagged set of 
+needs in the mid and upper frequency ranges.</p>
+<h4>And the Sound?</h4>
+<p>I started with Bon Jovi’s <em>Lost Highway</em> because it was close 
+at hand.  I had the preamp at a relatively low level, and the bass notes
+ sounded like they were playing out a speaker with a shredded woofer — 
+very buzzy.  Wow, wow, wow.</p>
+<p>And then I turned up the preamp to louder than normal listening volume.  And I just couldn’t stop.  Oh.  My.  Word.</p>
+<p>Once I got up to a high enough signal level to swamp the hiss in the 
+background and get past the low-frequency artifacting (more on this in a
+ bit), the sound was unbelievable.  I stood there with my jaw dropped 
+switching the EQ in and out of the mix, and I couldn’t believe I’ve been
+ listening to the way the stereo was for all these years with all that 
+music missing.  It was unbelievable.</p>
+<p>I’ll come back to how it was good and how good it was; but first, I 
+need to address the low-frequency artifacting.  The buzzing noise <em>does</em> go away when the equalizer is in digital bypass <em>and it also goes away</em> when the EQ is active but with a flat curve, so it’s something to do with the digital equalization.</p>
+<p>The manual warns against too great a difference between the settings 
+of adjacent equalizer bands — that it can cause “overflow” — and 
+obviously I have a pretty extreme difference between neighboring bands 
+in the bass range.  I tried smoothing out the lower end; but even after a
+ fair bit of tinkering, I can’t find the point between the curve set by 
+the auto-EQ and a flat response at which the low-end buzzing goes away.</p>
+<p>Even if I could locate bass settings that eliminated the buzzing, 
+they would likely be such a compromise that they’d defeat much of the 
+purpose of having the equalizer in the first place.  So chalk one up to 
+the inability of the digital signal processing algorithm to handle 
+extreme differences between neighboring bands.</p>
+<p>Additionally, this EQ is made to be used with professional equipment 
+running at a +4dBu (1.23V) signal level, not with consumer equipment at 
+-10dBV (.316V).  I’m giving it a much lower amplitude input than it’s 
+really made for; and especially as I hear the buzzing only in low-volume
+ portions of the music with the preamp at a low level, I can’t help but 
+think that the DSP algorithm is impacted even more adversely when 
+dealing with low-bit-length samples.</p>
+<p>The buzzing does <em>not</em> happen when the same portion of music 
+is played at a higher amplitude, so it’s not just a matter of higher 
+volume in another range aurally masking the artifacting; it’s really 
+about the input amplitude.  In fact, I can turn down the digital master 
+EQ output level, turn up the input amplitude, and largely eliminate both
+ the hiss and the buzz at the same output amplitude.</p>
+<h4>It Sounds Awful, So I Bought Another One</h4>
+<p>That is to say, I really wanted to know whether the hiss and buzz 
+were a design flaw or a faulty unit.  So I bought another one — and when
+ it arrived, it simply would not do auto-EQ.  Whuh???  I spent about an 
+hour reading and re-reading the manual to find out why every time I 
+pushed the AUTO-Q button, it just came right back without doing 
+anything.</p>
+<p>Well it turns out, the second one was running 1.2B firmware, the first was running 1.1, and the <a href="https://web.archive.org/web/20231207054753/http://www.behringer.com/EN/Products/DSP8024.aspx">Behringer web site</a> has the <a href="https://web.archive.org/web/20231207054753/http://behringerdownload.de/_software/DSP8024Firmware1-3.zip">1.3 firmware EPROM image available for free download</a>.
+  Go Behringer!  Rather than take the second one back to match the 
+first, I figured I’d go forward and hope against hope that the new 
+firmware might even address some of the DSP issues.</p>
+<p>The firmware goes on a 27C256 EPROM, and I didn’t have any on hand 
+(not sure why), but Joel did.  He burned me a new EPROM in exchange for a
+ burger and malt, and I was ready to swap.</p>
+<p><a href="https://web.archive.org/web/20231207054753/http://www2.neufeld.newton.ks.us/images/electronics/2009/05/23/DSCN3985.jpg"><img src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/DSCN3985_mid_cI1C.jpg" alt="Behringer DSP8024 main board"></a></p>
+<p>Obligatory “guts” photo of the DSP8024 main board.</p>
+<p><a href="https://web.archive.org/web/20231207054753/http://www2.neufeld.newton.ks.us/images/electronics/2009/05/23/DSCN3999.jpg"><img src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/DSCN3999_mid_cI1C.jpg" alt="EPROM in socket"></a></p>
+<p>The new EPROM with foil tape protecting the UV erasure window.</p>
+<p><a href="https://web.archive.org/web/20231207054753/http://www2.neufeld.newton.ks.us/images/electronics/2009/05/23/DSCN4014.JPG"><img src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/DSCN4014_mid_cI1C.jpg" alt="original ROM glued in, angle shot"></a></p>
+<p>I hot-glued the factory PROM into the case, both because I didn’t 
+know what else to do with it and in case someone else ever owns this EQ 
+and is weird about wanting it to be exactly the way it came from the 
+factory (like I am with arcade games).  I know the hot glue is at risk 
+of popping off the metal case; in the long term, I may put the PROM in 
+static foam in a baggie and tie it to something.</p>
+<h4>And the Sound?</h4>
+<p>Exactly the same as the other.  The flaws are design, not damage.</p>
+<h4>How It Was Good and How Good It Was</h4>
+<p>I had described the difference in sound to Jeremy, and he and I have 
+similar enough impressions of sound reproduction that he believed me and
+ wanted to hear for himself.</p>
+<p>He too was blown away.</p>
+<p>It has to be partly the boosts in the mid and treble ranges 
+clarifying the vocalists’ enunciation, bringing detail to the cymbals, 
+and filling out the timbre of mid-range instruments; but it really is as
+ though Jeremy and I had never heard the music before.  Of course the 
+correction in the bass range helps with the enjoyment as well.</p>
+<p>I let Jeremy run the controls and I handed him CDs to try.  Sometimes
+ he’d ask which track I wanted, but most of the time he just picked the 
+same one I had in mind.  Sometimes he’d hit the bypass button to take 
+the EQ in and out of the mix; sometimes he’d just wince and couldn’t 
+bring himself to bypass it.</p>
+<p>A few remarks from the session:</p>
+<p>On “Maxine”:  If it makes <em>this</em> sound good, it’s gotta be great!  <em>[That's the one song on <em>The Nightfly</em> that Jeremy doesn't love.  I love them all.  Favorite album ever.]</em></p>
+<p>“Only Over You”:  [bypass] Car driving by on the street.  [EQ] Now you’re in the car.  With the band.</p>
+<p>“Foreplay” / “Long Time”:  You can hear the organ growl underneath the guitars!</p>
+<p>“Jessica”:  I just want to listen to the whole album.</p>
+<p>“Rosanna”:  Wow, it even makes 80s pop music sound good. <img src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/icon_smile_cI1C.gif" alt=":-)" class="wp-smiley"> </p>
+<p>And many, many others.</p>
+<p>Finally from Jeremy:  I just want to sit and listen to all of my 
+music all over again.  Also:  They should just label this button, “What 
+we meant.”</p>
+<p>Me again:  On most albums,  the difference is so prominent as to make
+ the bypassed signal sound like “swimming pool speakers.”  Only very, 
+very rarely does it not make much difference — interestingly enough, 
+specifically including much of <em>Chicago 16</em>.</p>
+<h4>What Next?</h4>
+<p>Because of the extra equipment to power on and the extra effort 
+required to get a good sound out of the overall system at normal 
+listening levels, I’m not using the EQ most of the time, so I might as 
+well take it out of the system.</p>
+<p>When I move the amps down to the basement, I intend to use +4dbU 
+balanced transmission to get the signal from the preamp to the basement.
+  It seems plausible to me that the EQ will be a lot happier with a 
+higher input amplitude, and I’ll be happy to take the time to calibrate 
+the output level appropriately.  I’ll also build a full power sequencer 
+for all the equipment, so I could power up the EQ and automatically wait
+ 5-10 seconds before powering up the amps (to wait for the horrible EQ 
+power-on pop to get over with).</p>
+<p>I should try the auto-EQ with my speakers in a different room and/or 
+different speakers in my family room, to see how much of the bass 
+correction is needed because of the speakers and how much because of the
+ room.  I want to build new (triamped) speakers anyway; and if that 
+alleviates the need for such dramatic bass correction which in turn 
+eliminates the buzzy artifacting, I’ll be delighted.</p>
+<p>I intended the DSP8024 as an entry-level experiment with RTA and 
+auto-EQ, and for that it has served me well.  If I’m still not satisfied
+ with the sound in my finished system, I’m not at all opposed to buying a
+ different EQ.</p>
+<p>The RTA has interesting potential even where the DSP8024 is <em>not</em>
+ going to be the EQ in the system.  The RTA can generate pink noise, fed
+ through a different EQ into the amps, and display the spectrum analysis
+ of what’s received at the reference mike.  It could thus be used 
+strictly as a setup instrument to set an <em>external</em> EQ (graphic 
+or parametric) for as flat a response as can be achieved with as many 
+bands as the external EQ has available, then removed from the system.</p>
+<p>Jeremy’s already asking about using this setup to fine-tune his car 
+stereo — although we both have doubts about having enough and narrow 
+enough frequency bands on an car EQ (even Jeremy’s) to get the signal as
+ flat as the DSP8024 itself is capable of.</p>
+
+								
+				<p class="postmetadata alt">
+					<small>
+						This entry was posted
+												on Monday, June 8th, 2009 at 12:51 pm						by Keith Neufeld						and is filed under <a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?cat=22" title="View all posts in Audio" rel="category">Audio</a>, <a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?cat=7" title="View all posts in Repairs" rel="category">Repairs</a>.
+						You can follow any responses to this entry through the <a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?feed=rss2&amp;p=575">RSS 2.0</a> feed.
+
+													You can <a href="#respond">leave a response</a>, or <a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/wp-trackback.php?p=575" rel="trackback">trackback</a> from your own site.
+
+						
+					</small>
+				</p>
+
+			</div>
+		</div>
+
+	
+<!-- You can start editing here. -->
+
+	<h3 id="comments">29 Responses to “Installing a Behringer DSP8024 Equalizer and Upgrading Firmware”</h3>
+
+	<div class="navigation">
+		<div class="alignleft"></div>
+		<div class="alignright"></div>
+	</div>
+
+	<ol class="commentlist">
+			<li class="comment even thread-even depth-1" id="comment-23307">
+				<div id="div-comment-23307" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/52804abd793364a1dd04e77e7e3f7255_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><a href="https://web.archive.org/web/20231207054753/http://pepevi.blogspot.com/" rel="external nofollow" class="url">ppvi</a></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-23307">
+			June 9, 2009 at 02:15 am</a>		</div>
+
+		<p>Don’t you think there is too much difference and lack of continuity
+ in the auto-EQ result? The low range frequencies seem random. There 
+could be hidden peaks between bars. Also, these abrupt differences could
+ be the cause of the buzz. It may be bad DSP but that parameterization 
+seems too radical to me.</p>
+<p>Use a new room and post updates!</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-23385">
+				<div id="div-comment-23385" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/674383acd5515612f9276389ad79474e_cI1C.jpeg" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><a href="https://web.archive.org/web/20231207054753/http://www.dindj.se/" rel="external nofollow" class="url">andreas birgerson</a></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-23385">
+			July 12, 2009 at 10:57 am</a>		</div>
+
+		<p>so what menu command did you in fact select  to start generating the RTA pink noise? </p>
+<p>my 8024 sounded terrible with a totally random eq curve set from 
+powerup (also bought mine used) which caused the amplifier (an alto mac 
+2.4) to clip all the time until i realised i had to zero everything 
+before using it</p>
+<p>i am using balanced inputs from an old Pioneer DJM500 mixer (with 
+CDJ500MkII cdplayers) i also have a 9024 dynamics 
+processor/limiter/compressor but i have not learned to use either…</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-23548">
+				<div id="div-comment-23548" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_002_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Andrew</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-23548">
+			August 13, 2009 at 01:14 am</a>		</div>
+
+		<p>Great write-up. The Fail-safe relays are not for speaker protection
+ but are so that the signal path will not be broken if the power to this
+ unit fails. They are usually used in PA/Sound Reinforcement systems 
+where ‘the show must go on’.<br>
+Cheers,<br>
+Andrew</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment byuser comment-author-neufeld bypostauthor odd alt thread-odd thread-alt depth-1" id="comment-23552">
+				<div id="div-comment-23552" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_003_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><span style="background-color: #ffff66;">Keith Neufeld</span></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-23552">
+			August 13, 2009 at 06:07 am</a>		</div>
+
+		<div style="background-color: #ffff66;">
+<p>Andrew, you’re right that the DSP8024′s relays aren’t advertised as 
+being for speaker protection but for power bypass; it’s only my power 
+amp’s relays that are for speaker protection.</p>
+<p>I perhaps muddied the issue with my phrasing; but my point was merely
+ that the Behringer manual specifically says that the relays will 
+silently engage and disengage, and they were far from silent; and my 
+amp’s manual doesn’t promise silent switching, but delivers it.</p>
+</div>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-23655">
+				<div id="div-comment-23655" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_004_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><a href="https://web.archive.org/web/20231207054753/http://www.rockonaudio.com/" rel="external nofollow" class="url">Pete Lewis</a></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-23655">
+			August 28, 2009 at 11:16 am</a>		</div>
+
+		<p>Hey Keith,<br>
+Thanks so much for posting this blog! I am really excited to try this 
+out myself! About two months ago, a friend of mine asked me to run sound
+ for a wedding he was playing with his band.  I rented a console, and 
+borrowed gear from everyone I knew, and somehow pulled it off. I was 
+using my laptop with a MOTU interface to EQ my monitor sends and main 
+outs – mostly for notching out feedback, but I did my best just using my
+ ears to flatten out the room. I’m interested to put my ear to the test,
+ and compare what I think is flat to what an auto-button thinks. Thanks 
+again! rock on!</p>
+<p>ps. Thanks for your kind words about Sparkfun – I’m the quality 
+control and DFM guy at Sparkfun and that is how I stumbled upon your 
+blog.</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment byuser comment-author-neufeld bypostauthor odd alt thread-odd thread-alt depth-1" id="comment-23656">
+				<div id="div-comment-23656" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_003_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><span style="background-color: #ffff66;">Keith Neufeld</span></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-23656">
+			August 28, 2009 at 11:38 am</a>		</div>
+
+		<div style="background-color: #ffff66;">
+<p>Pete, great to hear from you!</p>
+<p>For what it’s worth, the DSP8024 has a “feedback destroyer” that 
+purports to make a lot of noise, find the feedback frequencies, and 
+notch filter them during your setup process, plus an active monitor that
+ can respond to squelch feedback during a performance.  I haven’t had a 
+chance to try it yet, but I’m certainly intrigued.  Just carry your best
+ earmuffs for the setup process. <img src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/icon_smile_cI1C.gif" alt=":-)" class="wp-smiley"> </p>
+<p>I’m planning to come back through Boulder next summer (Rocky Mountain
+ National Park camping trip).  If you haven’t got to try an auto-EQ unit
+ by then, I’ll be happy to drop one off with you for a week. <img src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/icon_wink_cI1C.gif" alt=";-)" class="wp-smiley"> </p>
+</div>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-24019">
+				<div id="div-comment-24019" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_005_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><a href="https://web.archive.org/web/20231207054753/http://www.midnightfalling.com/" rel="external nofollow" class="url">Silvio Giarratana</a></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-24019">
+			November 4, 2009 at 11:06 am</a>		</div>
+
+		<p>Keith,<br>
+I’m a musician and pro-audio engineer in NH which is how I found your 
+write-up. I just wanted to let you know how much I enoyed your write-up!
+ Having been using this platform and process since my first version of 
+this EQ (DSP8000 – and still in daily service) back in 1999 and can 
+still clearly remember that feeling of audio euphoria that you described
+ upon listening to your results of AUTO-EQ processing.<br>
+I have also recently acquired (actually from a barter for mixdown 
+services) a DSP8024 with the 1.2b firmware (no AUTO-EQ). If you could 
+can, can you provide a little detail regarding the 27C256 EPROM chip you
+ had burned – was it a specific version  (i.e. -c1, c2, c3, u1, u5, u6, 
+etc)?<br>
+Having just picked up a steal-deal on an EPROM burner I’m planning to (try to) burn my own EPROM with the 1.3 firmware image.<br>
+Thanks.</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment byuser comment-author-neufeld bypostauthor odd alt thread-odd thread-alt depth-1" id="comment-24025">
+				<div id="div-comment-24025" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_003_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><span style="background-color: #ffff66;">Keith Neufeld</span></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-24025">
+			November 8, 2009 at 05:18 pm</a>		</div>
+
+		<div style="background-color: #ffff66;">
+<p>Silvio, I think any 27256 will do.  You can see the Toshiba chip that
+ Joel had on hand in one of the photos about midway through the post.</p>
+</div>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment byuser comment-author-neufeld bypostauthor even thread-even depth-1" id="comment-24026">
+				<div id="div-comment-24026" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_003_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><span style="background-color: #ffff66;">Keith Neufeld</span></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-24026">
+			November 8, 2009 at 05:21 pm</a>		</div>
+
+		<div style="background-color: #ffff66;">
+<p>Andreas, I don’t remember exactly how I caused the pink noise to 
+generate.  I know it took some time reading the manual to figure it out.</p>
+</div>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-24039">
+				<div id="div-comment-24039" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/7108acab0e8e12618578ed31ffe9ffd0_cI1C.jpeg" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><a href="https://web.archive.org/web/20231207054753/http://justinmorrison.net/" rel="external nofollow" class="url">Justin</a></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-24039">
+			November 12, 2009 at 11:04 am</a>		</div>
+
+		<p>I recently picked up one of these and enjoyed your writeup.</p>
+<p>Have the same issue with Auto EQ just returning to the RTA screen 
+without doing anything. This is not my main problem with the unit 
+however.</p>
+<p>When the EQ is enabled, there is unacceptable noise through the 
+system with or without signal. You mention this above and brush right 
+past. Has anyone found a solution to this? Interconnects? Ground loop 
+interference?</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment byuser comment-author-neufeld bypostauthor even thread-even depth-1" id="comment-24040">
+				<div id="div-comment-24040" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_003_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><span style="background-color: #ffff66;">Keith Neufeld</span></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-24040">
+			November 12, 2009 at 11:50 am</a>		</div>
+
+		<div style="background-color: #ffff66;">
+<p>Justin, what I hear is definitely hiss, not ground loop hum.  I don’t have a real fix for it.</p>
+<p>My best workaround is to crank up the source’s preamp until it’s just
+ below clipping the EQ and crank down the EQ’s master level.  At least 
+on my unit, the hiss seems to be at a constant internal amplitude, so 
+you can fade it into the background by swamping it with your real signal
+ at a higher amplitude and compensating with the master volume.</p>
+<p>Since I’ve observed it on three of my own units now and you’ve heard 
+it on yours, my guess is it’s a design flaw at a pretty deep level 
+within the EQ.</p>
+</div>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-32343">
+				<div id="div-comment-32343" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_006_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Dave</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-32343">
+			September 7, 2015 at 11:36 pm</a>		</div>
+
+		<p>I wonder if anyone will follow up on 5 year post.  your article 
+helped me. thanks.  I know why your pinked room sounds bad.  it is 
+because you made it flat which puts too much high frequency energy in 
+the room.  there is only one eq curve that works and you will find it in
+ the original JBl sound system design manual.  They remove this little 
+treasure bit of knowledge when they added to the manual 20 years after 
+the first. and no one is publishing this info even though every one is 
+selling EQ’s very few know what curve to use so things sound good.   
+Dave</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment byuser comment-author-neufeld bypostauthor even thread-even depth-1" id="comment-32344">
+				<div id="div-comment-32344" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_003_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><span style="background-color: #ffff66;">Keith Neufeld</span></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-32344">
+			September 8, 2015 at 06:48 am</a>		</div>
+
+		<div style="background-color: #ffff66;">
+<p>Dave, I wonder whether you had a chance to read the post in detail.  
+The pinked room sounded AMAZING; the only things that sounded bad were 
+the digital artifacts.</p>
+</div>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-32345">
+				<div id="div-comment-32345" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_006_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Dave</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-32345">
+			September 8, 2015 at 08:54 am</a>		</div>
+
+		<p>I remember you said that.  I guess I was overwhelmed by length and 
+detail. I do that myself. I remember my self thinking flat was pretty 
+good.  As sound guy, I continued to get complaints about clarity and 
+hurting ears and often I had high frequency feedback problems that 
+limited the usable gain I could work with.  I have always been sensitive
+ to distortion in amplified sound and today as senior citizen I know 
+first hand the discomfort I was not aware of when I was strong and 
+healthy.  It has been said “ignorance is bliss. none the less you should
+ know since 1990 when I discovered this curve I have never had a 
+complaint and people praise me saying I have never heard people, even 
+the whole choir speaking or singing with such clarity. I can hear every 
+individual clearly. JBL uses the word “Intelligible Sound”.  Bottom line
+ a flat curve for acoustic output is not how sound works naturally.  and
+ when you force it to be flat we end up with too much high frequency 
+energy that casus listener fatigue and pain to the ears and other 
+problems. so down load this manual there are 2 downloads to get it all. <a href="https://web.archive.org/web/20231207054753/http://www.jblpro.com/ProductAttachments/pssdm_2.pdfand" rel="nofollow">http://www.jblpro.com/ProductAttachments/pssdm_2.pdfand</a>
+ turn to page 6-17  My general use interpretation of this graph is – 1 
+db every 1/3 octave starting at  1.2khz.  this is the 1s part of the 
+book. <a href="https://web.archive.org/web/20231207054753/http://www.jblpro.com/ProductAttachments/pssdm_1.pdf" rel="nofollow">http://www.jblpro.com/ProductAttachments/pssdm_1.pdf</a>
+  I know this roll off does not make since when you first look at it but
+ I guarantee, try it and you will be amassed all over again.  best 
+wishes.</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-32362">
+				<div id="div-comment-32362" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_007_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Raymond Guiry</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-32362">
+			September 28, 2015 at 05:03 am</a>		</div>
+
+		<p>Picked up a used DSP9024 recently,I believe both units are 
+similar.As regards hiss and buzz in analogue mode I was able to suppress
+ all noise by setting<br>
+gate threshold to around -80 to -85, you have to be careful here with 
+your quite passages,a little bit of trial and error will sort this 
+out.The next two culprits were the Ultramizer and Output gain bring both
+ of these to around the 16db and adjust to taste.These settings were 
+then linked to all bands.I have found that while the hiss is still there
+ it is masked and once the passage of music has stopped the gate will 
+keep your system hiss free.My next task is to tackle all bands 
+individually.I agree with everything Keith has to say I am currently 
+rediscovering all my old music collection including Nightfly.<br>
+Also used it on a live pa setup, does what it says on the tin, doubles your headroom and sits everything in the mix.</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-32625">
+				<div id="div-comment-32625" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_008_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Aleksandar Jovanovic</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-32625">
+			June 7, 2016 at 08:05 am</a>		</div>
+
+		<p>Dear friends ,</p>
+<p>I have a problem with the Behringer ULTRA – CURVE PRO DSP8024 , in 
+fact , two days ago on the display I received a message ” Low Battery !”
+ I immediately changed battery and put the appropriate battery Varta 
+2032 3V. Time to change the batteries was about 15 seconds .<br>
+When I turn the device on , I saw that I deleted the entire memory, but 
+I’m not much worried, but when I turned DBX M Reference Microphone, 
+ULTRA – CURVE PRO DSP8024 would not let me make a measurement ! Please 
+note that everything is set up according to the instructions, and so far
+ I have not had problems with earlier measurements. Do you give me 
+expert advice, what happened and why the device is not going to make a 
+measurement ? What is your advice, what should I do?? Any help is 
+appreciated !</p>
+<p>Regards Alexander</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-32626">
+				<div id="div-comment-32626" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_008_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Aleksandar Jovanovic</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-32626">
+			June 7, 2016 at 08:14 am</a>		</div>
+
+		<p>The measurement in fact refers to automatic measurement by activating the soft key AUTO-Q !!!<br>
+ Use the following steps for enabling AUTO-Q:</p>
+<p>1. Press RTA button to access RTA mode.<br>
+2. Press the setup button.<br>
+3. Set the source to “micro” (microphone).<br>
+4. Set mic gain to +80db.<br>
+5. Set mic correction to “none”.<br>
+6. Set the auto-Q curve to “flat”.<br>
+7. Set the RTA output to “pink”.<br>
+8. Press the RTA button.<br>
+9. Press the Tools button.<br>
+10. Press the Auto Q button.<br>
+11. Press the In/Out button (pink noise will now be present).<br>
+12. Press the soft key A for the left speaker/channel reading<br>
+13. Hold the microphone about three feet back from the front of the 
+speaker, focusing it between low and high frequency drivers. The unit 
+will measure the frequency response of your system.<br>
+14. Press OK.<br>
+15. Press soft key A (memory).<br>
+16. Press soft key B (store).<br>
+17. Select the correct program number using the cursor buttons.<br>
+18. Press soft key A (OK.)<br>
+19. Press soft key A (Memory).<br>
+20. Press soft key C (RTA to EQ) this will send the RTA reading to the EQ.<br>
+21. Press soft key A (L) for transfer of left side measurement.<br>
+22. Press the EQ button (the corrected EQ curve will appear).<br>
+23. Press soft key D (edit).<br>
+24. Press soft key A (memory).<br>
+25. Press soft key B (store).<br>
+26. Select the correct EQ memory location with the cursor buttons.<br>
+27. Press soft key A (OK).<br>
+28. Name your EQ curve, and you are done.<br>
+29. Perform the same procedure for the right side.<br>
+30. Save.</p>
+<p>Continues automatic measurement does not work !! Would replacing the 
+programmed EPROM 27C256 solve the problem and whether it would DSP 8024 
+functioning as it should !! ??</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-32678">
+				<div id="div-comment-32678" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/d89a3935339b49c5e11a3bf550b5bc07_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Roy McGriffon</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-32678">
+			August 3, 2016 at 08:59 am</a>		</div>
+
+		<p>Hi Keith.</p>
+<p>After reading your write-up on the 8024 Ultracurve I felt inspired to
+ find me a used one and set it up to help even out and flatten the 
+slightly asymmetrical response of my QUAD ESL57 pair. They sit in an 
+acoustically rather unforgiving environment and controlling them is 
+difficult. I’m sure I’ll get somewhere with the Ultracurve, which is a 
+nice concept, methinks. Of course I started by removing the 2032 battery
+ momentarily so as to clear all memory and start building my filtering 
+from scratch. The top is now back on and I’m rather optimistic about the
+ results I will achieve. I like the 8024 even if I have only had mine a 
+few hours yet.</p>
+<p>Best wishes,</p>
+<p>Roy<br>
+Amsterdam, Netherlands</p>
+<p>P.S.:  You are totally right about the quality of the manual. I 
+usually LOVE browsing equipment reference books but the Ultracurve 
+8024′s is appallingly written. A bit like Mein Kampf.</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-33055">
+				<div id="div-comment-33055" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Ryan Freese</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-33055">
+			August 29, 2017 at 05:34 pm</a>		</div>
+
+		<p>Have Behringer Ultra curve pro 31 band equalizer 8024 processor 
+that indicates low battery. How do I save manufacture preset program 
+before replacing bad battery. Removing battery will delete al program 
+settings. This item is now discontinued  item and can’t reach the 
+Behringer headquarters. Any info ASP will be appropriate. Thank you!</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-33106">
+				<div id="div-comment-33106" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_007_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Raymond Guiry</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-33106">
+			August 31, 2017 at 04:31 am</a>		</div>
+
+		<p>Hi Ryan ,<br>
+most information you require is in first post,<br>
+but to simplify<br>
+All manufacturers settings are stored on EPROM CHIP cannot be erased when replacing cell battery.<br>
+Only personal settings stored in memory will be lost when cell battery  
+is removed, so these need to be saved to PC via midi section.</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-33107">
+				<div id="div-comment-33107" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_007_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Raymond Guiry</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-33107">
+			August 31, 2017 at 04:55 am</a>		</div>
+
+		<p>Hi Ryan,<br>
+to connect to PC unit needs to be EPROM version 1.3<br>
+Software can be downloaded from Behringer site if you look for DSP 9024 
+and hit downloads,  both 9024 and 8024 use same software for PC</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-33109">
+				<div id="div-comment-33109" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad516503a11cd5ca435acc9bb6523536_cI1C.png" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Ryan Freese</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-33109">
+			August 31, 2017 at 09:10 am</a>		</div>
+
+		<p>Thanks Raymond! All the previous comments made above only talk 
+about operations parameter functions of the unit and not addressing any 
+problem sues with battery failures. You have somewhat eased my mine 
+knowing the factory setting will be there after changing out the bad 
+battery. I am a home owner only using the Behringer 8024 in a low budget
+ home drum studio. Little bit of drum recording and mostly listening to 
+my favorite music. I don’t really use any personal stored settings. Just
+ use the preset programming parameters to obtain good sound. Your 
+comment about connecting to a PC computer &amp; using EPROM CHIP is 
+behind my knowledge and also do not have or access to a PC COMPUTER. 
+Maybe I don’t have anything to worry for I dont have any personal 
+setting to save to a coomputer but it sounds like I would have to 
+readjust the parameter again to the way I had them set before replacing 
+bad battery.                         To address to another above comment
+ about hissing noise, in my experience when you first turn the unit on, 
+there will be hissing noise. You can go into the parameters settings and
+ lower the frequency tone down to about 50 Hz. Now when you return back 
+to your 1st program page or when  you 1st turn the unit on, There should
+ be a green light above the in/out button. By pressing this button the 
+hissing noise will be gone because you have select the signal in/out 
+output of the unit. This method should take care of the hissing when 
+your listening to music and you don’t have to crank up amplifier or 
+sound levels the hissing will be massed or buried in the musics tone.</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-34150">
+				<div id="div-comment-34150" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/2f93e9920aaff78c633a367ad0a6f679_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><a href="https://web.archive.org/web/20231207054753/http://none/" rel="external nofollow" class="url">Murat akbay</a></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-34150">
+			April 1, 2020 at 04:57 am</a>		</div>
+
+		<p>Hi Sir,<br>
+I have Behringer 8024.I need some setup help.<br>
+Ideal Pink noise level settings?<br>
+The distance between my speakers and sweet spot is 5,5  m.<br>
+Line gain?<br>
+Mic gain?<br>
+My speakers are tannoy15 golds,amplifier is Jadis ja 30.<br>
+Analyzer peak or rms?<br>
+I don’t want hurt my system.!<br>
+Regards</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-34159">
+				<div id="div-comment-34159" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/2f93e9920aaff78c633a367ad0a6f679_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><a href="https://web.archive.org/web/20231207054753/http://none/" rel="external nofollow" class="url">Murat akbay</a></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-34159">
+			April 6, 2020 at 12:29 pm</a>		</div>
+
+		<p>Hi,<br>
+MR.Javanovic’s instructions were very helpful, thank You Sir.🙏<br>
+Some friends are saying put the microphone to your listening point and make an other measurement  ?should I?<br>
+And my levels after the rta analyze were one channel too high one 
+channel too low.may be the Level settings are somehow wrong.Any more 
+instuctions,<br>
+Javanovic please help needed..<br>
+Otherwise after the RTA measurements the sound became very dynamic and balanced in every manner.<br>
+But I put the EQ results in to my Analog 31 band equalizer Clark Teknik dn370..<br>
+I am very satisfied with this set up..</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-34160">
+				<div id="div-comment-34160" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/9a14257435443de602416c55f6f56894_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Harlan Boulton</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-34160">
+			April 7, 2020 at 08:46 am</a>		</div>
+
+		<p>Does anyone have the DSP8024 firmware, so i can re program my eprom chip?</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-34214">
+				<div id="div-comment-34214" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/ad62681a3b1648bf1aac795a3b6e5a4b_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Barry Newmark</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-34214">
+			July 1, 2020 at 02:46 pm</a>		</div>
+
+		<p>Ryan,</p>
+<p>I can’t find the software to update the Firmware to 1.3. Do you still have it? If so, can you email it to me with instructions?</p>
+<p>Thanks,</p>
+<p>Barry</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-34219">
+				<div id="div-comment-34219" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/52b0428dc0834f9d9c2228b1e8999932_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn"><a href="https://web.archive.org/web/20231207054753/http://www.homerecording.com/" rel="external nofollow" class="url">Alfonso</a></cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-34219">
+			July 6, 2020 at 03:01 pm</a>		</div>
+
+		<p>Hi.</p>
+<p>Im looking for the ultra curve design software for remote controlling a dsp8024.</p>
+<p>Im running winxp.</p>
+<p>does anyone have it?<br>
+it is not at behringer website anymore. </p>
+<p>thank you.</p>
+<p><a href="https://web.archive.org/web/20231207054753/mailto:leyenda3@hotmaol.com">leyenda3@hotmaol.com</a></p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment odd alt thread-odd thread-alt depth-1" id="comment-34454">
+				<div id="div-comment-34454" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/9d2963a635cfd6403cb75b9bda15543f_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Martin</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-34454">
+			January 2, 2021 at 06:10 am</a>		</div>
+
+		<p>Hi, can any one help me with a 8024 question?</p>
+<p>If I change something under EQ, I hear the difference. If I want to 
+see what those changes do visually to the output, pressing RTA button, 
+it shows the graph, but also disables the EQ settings. In other words 
+the changes I made under EQ, can not be heard once I switch to RTA. So I
+ can only use the EQ change if I press EQ. I expected also to see the 
+changes in the graphical output of the signal. Am I doing something 
+wrong? Or is this not possible?</p>
+<p>I have firmware 1.2.</p>
+<p>Thank you in advance,</p>
+<p>Martin</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+		<li class="comment even thread-even depth-1" id="comment-34488">
+				<div id="div-comment-34488" class="comment-body">
+				<div class="comment-author vcard">
+		<img alt="" src="Installing%20a%20Behringer%20DSP8024%20Equalizer%20and%20Upgrading%20Firmware%20%C2%AB%20Keith's%20Electronics%20Blog_files/4a2a764920c2018684e77dd538dd6b4d_cI1C.html" class="avatar avatar-32 photo" height="32" width="32">		<cite class="fn">Kim T.</cite> <span class="says">says:</span>		</div>
+
+		<div class="comment-meta commentmetadata"><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575&amp;cpage=1#comment-34488">
+			January 26, 2021 at 04:23 am</a>		</div>
+
+		<p>Hi all!<br>
+The 1.3 firmware and the ultra curve design software for remote 
+controlling can be found Behringers site under the DSP9024. It seems to 
+use same firmwares than 8024.</p>
+<p>Kim</p>
+
+		<div class="reply">
+				</div>
+				</div>
+		</li>
+	</ol>
+
+	<div class="navigation">
+		<div class="alignleft"></div>
+		<div class="alignright"></div>
+	</div>
+ 
+
+
+<div id="respond">
+
+<h3>Leave a Reply</h3>
+
+<div class="cancel-comment-reply">
+	<small><a rel="nofollow" id="cancel-comment-reply-link" href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?p=575#respond" style="display:none;">Click here to cancel reply.</a></small>
+</div>
+
+
+<form action="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/wp-comments-post.php" method="post" id="commentform">
+
+
+<p><input type="text" name="author" id="author" size="22" tabindex="1" aria-required="true">
+<label for="author"><small>Name (required)</small></label></p>
+
+<p><input type="text" name="email" id="email" size="22" tabindex="2" aria-required="true">
+<label for="email"><small>Mail (will not be published) (required)</small></label></p>
+
+<p><input type="text" name="url" id="url" size="22" tabindex="3">
+<label for="url"><small>Website</small></label></p>
+
+
+<!--<p><small><strong>XHTML:</strong> You can use these tags: <code>&lt;a href=&quot;&quot; title=&quot;&quot;&gt; &lt;abbr title=&quot;&quot;&gt; &lt;acronym title=&quot;&quot;&gt; &lt;b&gt; &lt;blockquote cite=&quot;&quot;&gt; &lt;cite&gt; &lt;code&gt; &lt;del datetime=&quot;&quot;&gt; &lt;em&gt; &lt;i&gt; &lt;q cite=&quot;&quot;&gt; &lt;strike&gt; &lt;strong&gt; </code></small></p>-->
+
+<p><textarea name="comment" id="comment" cols="100%" rows="10" tabindex="4"></textarea></p>
+
+<p><input name="submit" type="submit" id="submit" tabindex="5" value="Submit Comment">
+<input type="hidden" name="comment_post_ID" value="575" id="comment_post_ID">
+<input type="hidden" name="comment_parent" id="comment_parent" value="0">
+</p>
+<p style="display: none;"><input type="hidden" id="akismet_comment_nonce" name="akismet_comment_nonce" value="1f99083aea"></p>
+
+	<p style="clear: both;" class="subscribe-to-comments">
+	<input type="checkbox" name="subscribe" id="subscribe" value="subscribe" style="width: auto;">
+	<label for="subscribe">Notify me of followup comments via e-mail</label>
+	</p>
+
+
+
+</form>
+
+</div>
+
+
+	
+	</div>
+
+
+<hr>
+<div id="footer" role="contentinfo">
+<!-- If you'd like to support WordPress, having the "powered by" link somewhere on your blog is the best way; it's our only promotion or advertising. -->
+	<p>
+		Keith's Electronics Blog is proudly powered by
+		<a href="https://web.archive.org/web/20231207054753/http://wordpress.org/">WordPress</a>
+		<br><a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?feed=rss2">Entries (RSS)</a>
+		and <a href="https://web.archive.org/web/20231207054753/http://www.neufeld.newton.ks.us/electronics/?feed=comments-rss2">Comments (RSS)</a>.
+		<!-- 16 queries. 0.812 seconds. -->
+	</p>
+</div>
+</div>
+
+<!-- Gorgeous design by Michael Heilemann - http://binarybonsai.com/kubrick/ -->
+
+		
+
+
+</body></html>
+<!--
+     FILE ARCHIVED ON 05:47:53 Dec 07, 2023 AND RETRIEVED FROM THE
+     INTERNET ARCHIVE ON 07:00:26 Sep 02, 2026.
+     JAVASCRIPT APPENDED BY WAYBACK MACHINE, COPYRIGHT INTERNET ARCHIVE.
+
+     ALL OTHER CONTENT MAY ALSO BE PROTECTED BY COPYRIGHT (17 U.S.C.
+     SECTION 108(a)(3)).
+-->
+<!--
+playback timings (ms):
+  captures_list: 0.345
+  exclusion.robots: 0.028
+  exclusion.robots.policy: 0.021
+  esindex: 0.006
+  cdx.remote: 39.676
+  LoadShardBlock: 235.795 (3)
+  PetaboxLoader3.datanode: 180.606 (4)
+  load_resource: 165.392
+  PetaboxLoader3.resolve: 117.665
+  nav: 0.231 (6)
+-->

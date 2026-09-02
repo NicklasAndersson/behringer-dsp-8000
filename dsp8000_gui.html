@@ -1,0 +1,261 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>DSP8000 kontroll</title>
+<!--
+  Manuell kontroll av DSP8000:s grafiska EQ via Web MIDI (Chrome/Edge).
+  Öppna filen direkt, eller om Web MIDI blockeras från file://:
+      python3 -m http.server   ->  http://localhost:8000/dsp8000_gui.html
+
+  Styr det som faktiskt går via MIDI: 31-bands GEQ (L/R), masterfaders,
+  programval. PEQ/delay/gate/limiter/feedback destroyer går inte via MIDI -
+  ställ på enheten, spara som program, hämta här.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 13px system-ui, sans-serif; margin: 1rem; }
+  h1 { font-size: 1rem; }
+  #bar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+         margin-bottom: 1rem; }
+  #bar label { display: flex; gap: .3rem; align-items: center; }
+  select, input[type=number] { font: inherit; padding: .15rem .3rem; }
+  #status { margin-left: auto; opacity: .7; }
+  #eq { display: flex; gap: 2px; align-items: flex-end; overflow-x: auto;
+        padding-bottom: .5rem; }
+  .band { display: flex; flex-direction: column; align-items: center;
+          min-width: 34px; }
+  .band .db { font-variant-numeric: tabular-nums; font-size: 11px; }
+  .band .hz { font-size: 10px; opacity: .7; white-space: nowrap;
+              writing-mode: vertical-rl; height: 3.2em; }
+  .sliders { display: flex; gap: 1px; }
+  input[type=range][orient] { writing-mode: vertical-lr; direction: rtl;
+        width: 14px; height: 150px; }
+  .band.wide input[type=range] { width: 20px; }
+  #master { display: flex; gap: 1.5rem; margin: 1rem 0; }
+  .mfad { display: flex; flex-direction: column; align-items: center; }
+  #prog button, #bar button { font: inherit; padding: .2rem .5rem; }
+  .note { opacity: .7; max-width: 46rem; margin-top: 1rem; }
+  .warn { color: #b45; }
+  h2 { font-size: .95rem; margin: 1.5rem 0 .3rem; }
+  #peq { border-collapse: collapse; }
+  #peq th, #peq td { border: 1px solid #8884; padding: .2rem .6rem; text-align: left;
+                     font-variant-numeric: tabular-nums; }
+</style>
+
+<h1>DSP8000 – grafisk EQ via MIDI</h1>
+
+<div id="bar">
+  <label>Utport <select id="port"></select></label>
+  <label>MIDI-kanal <input id="ch" type="number" min="1" max="16" value="1"></label>
+  <label>Controller offset <input id="offset" type="number" min="0" max="64" value="0"></label>
+  <label>Kanal
+    <select id="mode">
+      <option value="link">Länkad (L+R)</option>
+      <option value="L">Endast L</option>
+      <option value="R">Endast R</option>
+    </select>
+  </label>
+  <button id="sendall">Skicka alla</button>
+  <button id="zero">Nolla alla band</button>
+  <label>Ladda REW-JSON <input id="file" type="file" accept=".json"></label>
+  <span id="status">ingen MIDI</span>
+</div>
+
+<div id="eq"></div>
+
+<div id="master">
+  <div class="mfad">
+    <input id="mL" type="range" orient min="0" max="127" value="64">
+    <span>Master L <b id="mLv">64</b></span>
+  </div>
+  <div class="mfad">
+    <input id="mR" type="range" orient min="0" max="127" value="64">
+    <span>Master R <b id="mRv">64</b></span>
+  </div>
+  <span class="note">Masterfaderns dB-skala är okänd (0–127 rått, 64 = mitten).</span>
+</div>
+
+<div id="prog">
+  Program <input id="progn" type="number" min="0" max="99" value="0">
+  <button id="progget">Hämta program</button>
+  <span class="note">Byter minnesplats på enheten (Program Change).</span>
+</div>
+
+<h2>Parametriska filter — ställ in för hand</h2>
+<p class="note">Går <b>inte</b> via MIDI. Ladda REW-JSON ovan så fylls tabellen.
+  Stereolink påverkar inte PEQ → ställ in på <b>både L och R</b>.</p>
+<table id="peq">
+  <tr><th>#</th><th>Frekvens</th><th>Gain</th><th>Q</th><th>≈ bandbredd</th></tr>
+  <tr><td colspan="5" class="note">ingen JSON laddad</td></tr>
+</table>
+<p class="note">
+  På DSP8000: <b>PEQ</b>-sidan → välj filter 1/2/3 → sätt <b>frekvens</b>,
+  <b>bandbredd</b> (oktav) och <b>gain</b> (0,5 dB-steg, +16…−48 dB).
+  De 3 filtren delas med Feedback Destroyer. Spara som program när klart.
+</p>
+
+<p class="note">
+  <b>Går inte via MIDI heller:</b> delay, gate, limiter, feedback destroyer,
+  Auto-Q, stereolink. Ställ på enheten, spara program, hämta via programval.
+  <br><b>Verifiera</b> alltid med en REW-sweep – enheten rapporterar inte
+  tillbaka sitt tillstånd på ett läsbart sätt.
+</p>
+
+<script>
+const BANDS = [20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,
+  1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
+
+const $ = id => document.getElementById(id);
+let out = null;
+
+// dB -> CC-värde. Verifierat mot enheten: CC 64 = 0 dB, CC 96 = +8 dB.
+const dbToCc = db => Math.max(0, Math.min(127, Math.round(64 + db * 4)));
+const ccBand = (i, chan) => (+$('offset').value) + (chan === 'R' ? 32 : 0) + i;
+const ccMaster = chan => (+$('offset').value) + (chan === 'R' ? 63 : 31);
+
+function sendCC(cc, val, when) {
+  if (!out) return;
+  const msg = [0xB0 | (($('ch').value | 0) - 1), cc & 127, val & 127];
+  when ? out.send(msg, when) : out.send(msg);
+}
+function sendBand(i, db, when) {
+  const m = $('mode').value, v = dbToCc(db);
+  if (m === 'link' || m === 'L') sendCC(ccBand(i, 'L'), v, when);
+  if (m === 'link' || m === 'R') sendCC(ccBand(i, 'R'), v, when);
+}
+
+// Bygg 31 band
+const eq = $('eq');
+BANDS.forEach((hz, i) => {
+  const b = document.createElement('div');
+  b.className = 'band';
+  b.innerHTML = `<span class="db" id="d${i}">0.0</span>
+    <div class="sliders">
+      <input type="range" orient min="-16" max="16" step="0.5" value="0" id="s${i}">
+    </div>
+    <span class="hz">${hz >= 1000 ? (hz/1000)+'k' : hz} Hz</span>`;
+  eq.appendChild(b);
+  const s = $('s'+i);
+  const push = () => { $('d'+i).textContent = (+s.value).toFixed(1); sendBand(i, +s.value); };
+  s.addEventListener('input', push);
+  s.addEventListener('change', push);   // slutvärdet landar även om drag-events tappas
+});
+
+function sendAll() {
+  // schemalägg 3 ms isär så enhetens MIDI-buffert inte svämmar över
+  let t = performance.now();
+  BANDS.forEach((_, i) => { sendBand(i, +$('s'+i).value, t); t += 3; });
+  sendCC(ccMaster('L'), +$('mL').value, t); t += 3;
+  sendCC(ccMaster('R'), +$('mR').value, t);
+  $('status').textContent = 'skickade alla ' + (BANDS.length) + ' band';
+  setTimeout(() => out && ($('status').textContent = 'MIDI: ' + out.name), 900);
+}
+$('sendall').onclick = sendAll;
+
+$('zero').onclick = () => {
+  BANDS.forEach((_, i) => {
+    $('s'+i).value = 0; $('d'+i).textContent = '0.0'; sendBand(i, 0);
+  });
+  save();
+};
+
+$('mL').addEventListener('input', e => {
+  $('mLv').textContent = e.target.value; sendCC(ccMaster('L'), +e.target.value);
+});
+$('mR').addEventListener('input', e => {
+  $('mRv').textContent = e.target.value; sendCC(ccMaster('R'), +e.target.value);
+});
+
+$('progget').onclick = () => {
+  if (!out) return;
+  out.send([0xC0 | (($('ch').value | 0) - 1), (+$('progn').value) & 127]);
+};
+
+// Q -> bandbredd i oktaver (DSP8000 anger PEQ-bandbredd i oktaver, REW i Q)
+const qToOct = q => Math.asinh(1 / (2 * q)) * 2 / Math.LN2;
+
+function showPeq(filters) {
+  const rows = (filters || [])
+    .slice().sort((a, b) => Math.abs(b.gaindB || 0) - Math.abs(a.gaindB || 0))
+    .slice(0, 3);
+  const t = $('peq');
+  t.innerHTML = '<tr><th>#</th><th>Frekvens</th><th>Gain</th><th>Q</th>'
+    + '<th>≈ bandbredd</th></tr>' + (rows.length
+    ? rows.map((f, i) => `<tr><td>${i+1}</td><td>${(f.frequency||0).toFixed(0)} Hz</td>`
+        + `<td>${(f.gaindB||0).toFixed(1)} dB</td><td>${(f.q||0).toFixed(2)}</td>`
+        + `<td>${qToOct(f.q||1).toFixed(2)} okt</td></tr>`).join('')
+    : '<tr><td colspan="5" class="note">inga parametriska filter i JSON:en</td></tr>');
+}
+
+// Ladda rew_eq_suggestion.json: grafiska band + parametriska filter
+$('file').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const data = JSON.parse(await f.text());
+  const g = data.graphic_band_gains_db || {};
+  BANDS.forEach((hz, i) => {
+    if (g[hz] == null) return;
+    const db = Math.max(-16, Math.min(16, g[hz]));
+    $('s'+i).value = db; $('d'+i).textContent = db.toFixed(1); sendBand(i, db);
+  });
+  peqCache = data.peq_filters || [];
+  showPeq(peqCache);
+  save();
+});
+
+// Spara/återställ UI-tillstånd (localStorage) - överlever refresh, skickar inget
+const KEY = 'dsp8000_gui';
+let peqCache = [];
+function save() {
+  try {
+    localStorage.setItem(KEY, JSON.stringify({
+      bands: BANDS.map((_, i) => +$('s'+i).value),
+      mL: +$('mL').value, mR: +$('mR').value, mode: $('mode').value,
+      ch: $('ch').value, offset: $('offset').value, progn: $('progn').value,
+      peq: peqCache,
+    }));
+  } catch (e) {}
+}
+function restore() {
+  let st; try { st = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
+  if (!st) return;
+  (st.bands || []).forEach((v, i) => {
+    if (!$('s'+i)) return;
+    $('s'+i).value = v; $('d'+i).textContent = (+v).toFixed(1);
+  });
+  if (st.mL != null) { $('mL').value = st.mL; $('mLv').textContent = st.mL; }
+  if (st.mR != null) { $('mR').value = st.mR; $('mRv').textContent = st.mR; }
+  for (const k of ['mode', 'ch', 'offset', 'progn'])
+    if (st[k] != null) $(k).value = st[k];
+  if (st.peq && st.peq.length) showPeq(st.peq);
+}
+document.addEventListener('change', save);
+restore();
+
+// Web MIDI
+if (!navigator.requestMIDIAccess) {
+  $('status').textContent = 'Web MIDI stöds inte – använd Chrome/Edge';
+  $('status').className = 'warn';
+} else {
+  navigator.requestMIDIAccess().then(access => {
+    const fill = () => {
+      const outs = [...access.outputs.values()];
+      $('port').innerHTML = outs.map((o, i) =>
+        `<option value="${i}">${o.name}</option>`).join('');
+      const pick = () => {
+        out = outs[$('port').value | 0] || null;
+        $('status').textContent = out ? 'MIDI: ' + out.name : 'ingen utport';
+        $('status').className = out ? '' : 'warn';
+      };
+      $('port').onchange = pick;
+      // föredra AudioBox om den finns
+      const ab = outs.findIndex(o => /audiobox/i.test(o.name));
+      if (ab >= 0) $('port').value = ab;
+      pick();
+    };
+    fill();
+    access.onstatechange = fill;
+  }, () => {
+    $('status').textContent = 'MIDI nekades';
+    $('status').className = 'warn';
+  });
+}
+</script>
