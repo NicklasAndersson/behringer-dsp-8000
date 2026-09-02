@@ -143,58 +143,90 @@ def grab_dump(out, inp, req=(0x70, 0x01)):
     return None
 
 
-def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64):
-    """Kontrollerad capture: dumpa, sätt ETT GEQ-band via CC, dumpa igen, visa
-    vilka byte i dumpen som ändrades. Det här är verktyget för att kartlägga
-    den packade dumpens layout (midi_captures.txt: "FÖR ATT KNÄCKA HELA
-    LAYOUTEN"). restore = CC-värde att skicka tillbaka efteråt (64 = 0 dB;
-    None = lämna bandet på `value`)."""
-    cc_num = cc_map(channel)[band_freq]
-    ts = time.strftime("%H%M%S")
-    before_f = Path(f"probe_{band_freq:g}Hz_{channel}_before_{ts}.syx")
-    after_f = Path(f"probe_{band_freq:g}Hz_{channel}_after_cc{value}_{ts}.syx")
-    with open_output() as out, open_input() as inp:
-        print("Dump 1/2 (före)...")
-        before = grab_dump(out, inp)
-        if before is None:
-            raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
-                             "enheten på EQ-huvudskärmen.")
-        print(f"  CC {cc_num} = {value}  ({band_freq:g} Hz {channel}, "
-              f"{dsp8000.cc_to_db(value):+.2f} dB)")
-        out.send(mido.Message("control_change", channel=midi_channel - 1,
-                              control=cc_num, value=value))
-        time.sleep(0.3)
-        print("Dump 2/2 (efter)...")
-        after = grab_dump(out, inp)
-        if after is None:
-            raise SystemExit("Andra dumpen kom inte. Enheten kanske bytte skärm.")
-        if restore is not None:
-            out.send(mido.Message("control_change", channel=midi_channel - 1,
-                                  control=cc_num, value=restore))
-            print(f"  återställde CC {cc_num} = {restore}")
-    before_f.write_bytes(b"\xf0" + before + b"\xf7")
-    after_f.write_bytes(b"\xf0" + after + b"\xf7")
-    print(f"\n{before_f}\n{after_f}")
+GEQ_DATA_SPAN = (52, 128)   # data-offset-spann för GEQ-blocket (bit 373 .. 373+64*8, /7)
 
+
+def _report_dump_diff(before, after):
+    """Skriv ut vilka byte + vilka GEQ-band som skiljer mellan två dumpar.
+    Byte utanför GEQ_DATA_SPAN = kandidat för PEQ/delay/övrigt."""
     n = min(len(before), len(after))
     diff = [i for i in range(n) if before[i] != after[i]]
     if len(before) != len(after):
         print(f"OBS olika längd: {len(before)} vs {len(after)}")
     if not diff:
-        print("\nIngen byte ändrades — CC:t nådde inte enheten, eller dumpen "
-              "speglar inte working buffer. Kolla CNTL RCV = CC_OFFSET.")
+        print("\nIngen byte ändrades.")
         return
     hdr = 10  # 10-byte dump-header före databyten
-    print(f"\n{len(diff)} byte ändrades, dump-offset {diff[0]}..{diff[-1]} "
-          f"(data-offset {diff[0]-hdr}..{diff[-1]-hdr}):")
+    lo, hi = GEQ_DATA_SPAN
+    print(f"\n{len(diff)} byte ändrades:")
     for i in diff:
-        print(f"  data[{i-hdr:5d}]  {before[i]:3d} -> {after[i]:3d}")
+        d = i - hdr
+        tag = "" if lo <= d < hi else "   <- utanför GEQ-blocket"
+        print(f"  data[{d:5d}]  {before[i]:3d} -> {after[i]:3d}{tag}")
     ga = syx_tools.decode_geq(b"\xf0" + before + b"\xf7")
     gb = syx_tools.decode_geq(b"\xf0" + after + b"\xf7")
     for name in ("L", "R"):
         for j, (x, y) in enumerate(zip(ga[name], gb[name])):
             if x != y:
                 print(f"  GEQ {name} {dsp8000.ISO_BANDS[j]:g} Hz: {x:+.2f} -> {y:+.2f} dB")
+
+
+def grab(path):
+    """Hämta en dump på begäran och spara den. Ändrar inget på enheten.
+    Bygg upp ett bibliotek av kända tillstånd att diffa med syx_tools."""
+    with open_output() as out, open_input() as inp:
+        d = grab_dump(out, inp)
+    if d is None:
+        raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
+                         "enheten på EQ-huvudskärmen.")
+    Path(path).write_bytes(b"\xf0" + d + b"\xf7")
+    print(f"{len(d)} databyte -> {path}  (sub-kod {d[5]:02x} {d[6]:02x})")
+
+
+def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
+               manual=False):
+    """Kontrollerad capture: dumpa, ändra EN sak, dumpa igen, visa vilka byte
+    + GEQ-band som ändrades. Kartlägger den packade dumpens layout.
+
+    manual=False: ändringen är ett GEQ-band satt via CC (restore = CC att
+        skicka tillbaka efteråt, 64 = 0 dB, None = lämna kvar).
+    manual=True:  ingen CC - skriptet pausar och du gör EN ändring på enheten
+        själv (PEQ-gain, delay, gate ...). Så kartläggs de delar som inte går
+        via MIDI. Enheten hamnar inte tillbaka automatiskt."""
+    ts = time.strftime("%H%M%S")
+    if manual:
+        before_f, after_f = Path(f"probe_manual_before_{ts}.syx"), Path(f"probe_manual_after_{ts}.syx")
+    else:
+        cc_num = cc_map(channel)[band_freq]
+        before_f = Path(f"probe_{band_freq:g}Hz_{channel}_before_{ts}.syx")
+        after_f = Path(f"probe_{band_freq:g}Hz_{channel}_after_cc{value}_{ts}.syx")
+    with open_output() as out, open_input() as inp:
+        print("Dump 1/2 (före)...")
+        before = grab_dump(out, inp)
+        if before is None:
+            raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
+                             "enheten på EQ-huvudskärmen.")
+        if manual:
+            input("  Gör EN ändring på enheten nu (t.ex. PEQ 1 gain -6 dB), "
+                  "tryck Enter när klar: ")
+        else:
+            print(f"  CC {cc_num} = {value}  ({band_freq:g} Hz {channel}, "
+                  f"{dsp8000.cc_to_db(value):+.2f} dB)")
+            out.send(mido.Message("control_change", channel=midi_channel - 1,
+                                  control=cc_num, value=value))
+            time.sleep(0.3)
+        print("Dump 2/2 (efter)...")
+        after = grab_dump(out, inp)
+        if after is None:
+            raise SystemExit("Andra dumpen kom inte. Enheten kanske bytte skärm.")
+        if not manual and restore is not None:
+            out.send(mido.Message("control_change", channel=midi_channel - 1,
+                                  control=cc_num, value=restore))
+            print(f"  återställde CC {cc_num} = {restore}")
+    before_f.write_bytes(b"\xf0" + before + b"\xf7")
+    after_f.write_bytes(b"\xf0" + after + b"\xf7")
+    print(f"\n{before_f}\n{after_f}")
+    _report_dump_diff(before, after)
 
 
 def _geq_from_dump(payload):
@@ -375,6 +407,7 @@ def main():
     sub.add_parser("monitor").add_argument("--seconds", type=int, default=30)
     sub.add_parser("sysex").add_argument("--write-test", action="store_true")
     sub.add_parser("readback")
+    sub.add_parser("grab").add_argument("path", help="filnamn att spara dumpen som")
     pb = sub.add_parser("probe")
     pb.add_argument("--band", type=float, default=1000)
     pb.add_argument("--value", type=int, default=127, metavar="CC-0-127")
@@ -383,6 +416,8 @@ def main():
                     metavar="1-16")
     pb.add_argument("--no-restore", action="store_true",
                     help="lämna bandet på --value i stället för att skicka 0 dB")
+    pb.add_argument("--manual", action="store_true",
+                    help="ingen CC - pausa och gör ändringen på enheten själv (PEQ m.m.)")
     for name in ("send", "calibrate"):
         sp = sub.add_parser(name)
         sp.add_argument("--midi-channel", type=int, default=1, choices=range(1, 17),
@@ -410,9 +445,11 @@ def main():
         sysex_probe(args.write_test)
     elif args.cmd == "readback":
         readback()
+    elif args.cmd == "grab":
+        grab(args.path)
     elif args.cmd == "probe":
         probe_band(args.band, args.value, args.channel, args.midi_channel,
-                   restore=None if args.no_restore else 64)
+                   restore=None if args.no_restore else 64, manual=args.manual)
     elif args.cmd == "send":
         send(args.channel, args.midi_channel, args.dry_run, args.verify)
     elif args.cmd == "calibrate":
