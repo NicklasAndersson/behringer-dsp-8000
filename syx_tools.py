@@ -7,6 +7,10 @@ ingen MIDI. Dump-layouten i detalj: docs/midi.md avsnitt 6.
     python syx_tools.py eq   dump.syx            # 31+31 grafiska band + de 6 PEQ-filtren
     python syx_tools.py diff a.syx b.syx         # råa byte + GEQ/PEQ som ändrats
 
+patch_dump() gör inversen av decode_*: skriver in GEQ-band och PEQ-poster i
+en befintlig dump (allt annat - header, master, okartlagda block - bevaras),
+så en patchad dump kan pushas tillbaka till enheten. Se rew_to_dsp8000.py apply.
+
 SND MEMORY DUMP / SysEx-svar (`F0 00 20 32 00 01 4F 0A|12 …  F7`):
   * 10-byte header, sedan 12100 databyte, alla < 128 (7-bit-safe) men BIT-PACKAT.
     Databyten packas MSB-först till en bitström; fälten läses ur den. Verifierat
@@ -91,6 +95,68 @@ def decode_peq(b):
             "on": bool(fr or bw or abs(g) >= 8),
         })
     return out
+
+
+def _set_bits(data, pos, width, value):
+    """Skriv `width` bitar av `value` (MSB först) i den 7-bit-packade bitströmmen
+    `data` (bytearray av databyte utan F0/header/F7), med start på bit `pos`.
+    Rör bara bit 0-6 i varje byte -> resultatet förblir < 128 (7-bit-safe)."""
+    for i in range(width):
+        bit = (value >> (width - 1 - i)) & 1
+        byte, off = (pos + i) // 7, 6 - ((pos + i) % 7)
+        if bit:
+            data[byte] |= 1 << off
+        else:
+            data[byte] &= ~(1 << off)
+
+
+def geq_value(db):
+    """dB -> det tecknade 8-bitarsvärde dumpen lagrar (CC - 64, kvarts-dB)."""
+    return (dsp8000.db_to_cc(db) - 64) & 0xFF
+
+
+def peq_raw(freq_hz, bw_oct, gain_db):
+    """(frekvens, bandbredd okt, gain dB) -> (fr, bw, g) råvärden för dumpen,
+    klippta till fältbredderna. Inversen av avkodningen i decode_peq."""
+    import math
+    fr = max(0, min(2047, round(640 * math.log10(max(freq_hz, 20) / 20))))
+    bw = max(0, min(1023, round(bw_oct * 60) - 1))
+    g = max(-1024, min(1023, round(gain_db * 16))) & 0x7FF
+    return fr, bw, g
+
+
+def patch_dump(base, geq_L=None, geq_R=None, peqs=None):
+    """Skriv GEQ och/eller PEQ i en befintlig dump och returnera den nya (F0…F7).
+
+    base:   komplett minnesdump (bytes, F0…F7) att utgå från - allt som inte
+            skrivs bevaras exakt (header, master, delay/gate/limiter, 100 program).
+    geq_L/geq_R: lista med 31 dB (ISO-bandordning), eller None för att lämna kanalen.
+    peqs:   lista med 6 poster i ordning L1 R1 L2 R2 L3 R3, var och en None (=OFF,
+            nollställs) eller {'freq_hz','bw_oct','gain_db'}. None hela listan = rör inte PEQ.
+
+    Master lämnas orört (skalan är inte verifierad). 7-bit-safe: se _set_bits."""
+    if not is_memory_dump(base):
+        raise SystemExit("patch_dump: base är inte en minnesdump (F0 00 20 32 00 01 4F …).")
+    data = bytearray(base[1 + DUMP_HEADER_LEN:-1])
+    for ch, gains in (("L", geq_L), ("R", geq_R)):
+        if gains is None:
+            continue
+        if len(gains) != 31:
+            raise SystemExit(f"patch_dump: {ch} behöver 31 bandvärden, fick {len(gains)}.")
+        first = 0 if ch == "L" else 32          # 31 band + master mellan kanalerna
+        for n, db in enumerate(gains):
+            _set_bits(data, GEQ_BIT_OFFSET + 8 * (first + n), 8, geq_value(db))
+    if peqs is not None:
+        if len(peqs) != 6:
+            raise SystemExit(f"patch_dump: peqs behöver 6 poster (L1 R1 L2 R2 L3 R3), fick {len(peqs)}.")
+        for k, rec in enumerate(peqs):
+            base_bit = PEQ_BIT_OFFSET + PEQ_REC_BITS * k
+            fr, bw, g = ((0, 0, 0) if rec is None
+                         else peq_raw(rec["freq_hz"], rec["bw_oct"], rec["gain_db"]))
+            _set_bits(data, base_bit, 11, fr)
+            _set_bits(data, base_bit + 11, 10, bw)
+            _set_bits(data, base_bit + 21, 11, g)
+    return base[:1 + DUMP_HEADER_LEN] + bytes(data) + base[-1:]
 
 
 def hexdump(b, start=0, length=None, width=16):
