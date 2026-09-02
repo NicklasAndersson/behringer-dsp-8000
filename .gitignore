@@ -10,3 +10,4 @@ dsp8000_config.html
 # döp om och committa de som ska sparas som referens (t.ex. dsp8000_sysex_0db.syx)
 dsp8000_sysex_[0-9]*.syx
 dsp8000_sysex_reply_*.syx
+probe_*.syx
