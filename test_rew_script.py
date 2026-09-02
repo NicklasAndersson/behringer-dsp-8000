@@ -13,6 +13,7 @@ from pathlib import Path
 import dsp8000
 import rew_script as r
 import rew_to_dsp8000 as m   # importerbar utan mido (mido = None då)
+import syx_tools
 
 r.time.sleep = lambda s: None  # inga riktiga väntetider
 _ORIG = (r.api_get, r.api_post, r.api_delete)
@@ -275,6 +276,31 @@ def test_geq_status_lines_decodes_fader_frame():
 def test_cc_roundtrip():
     for db in (-16, -12.5, -0.5, 0, 0.5, 3, 8, 15.5):
         assert dsp8000.cc_to_db(dsp8000.db_to_cc(db)) == db, db
+
+
+def test_decode_geq_known_dumps():
+    """De committade dumparna har känt GEQ-innehåll: _0db = allt 0 dB,
+    _p16db = allt +16 dB. Fångar om bitström-offset/bredd/tecken går sönder."""
+    here = Path(__file__).parent
+    zero = syx_tools.decode_geq((here / "dsp8000_sysex_0db.syx").read_bytes())
+    assert zero["L"] == [0.0] * 31 and zero["R"] == [0.0] * 31, zero
+    mx = syx_tools.decode_geq((here / "dsp8000_sysex_p16db.syx").read_bytes())
+    assert mx["L"] == [16.0] * 31 and mx["R"] == [16.0] * 31, mx
+
+
+def test_decode_geq_roundtrips_a_single_band():
+    """Bygg en dump med bara ett band satt, avkoda tillbaka samma dB."""
+    payload = bytearray(10 + 12100)                     # header + nollor
+    payload[5:8] = b"\x4f\x0a\x40"
+    # band 5 vänster (63 Hz) = -8 dB -> s = -32; MSB-först i bit-strömmen
+    n, s = 5, dsp8000.db_to_cc(-8.0) - 64
+    for i in range(8):
+        bit = (s >> (7 - i)) & 1
+        pos = syx_tools.GEQ_BIT_OFFSET + 8 * n + i
+        byte, off = pos // 7, 6 - (pos % 7)
+        payload[10 + byte] |= bit << off
+    g = syx_tools.decode_geq(b"\xf0" + bytes(payload) + b"\xf7")
+    assert g["L"][5] == -8.0 and g["L"][4] == 0.0 and g["L"][6] == 0.0, g["L"][:8]
 
 
 def test_dsp8000_selftest():

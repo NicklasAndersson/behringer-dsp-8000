@@ -1,26 +1,29 @@
 """
 Hjälpverktyg för DSP8000:s SysEx-dumpar (.syx från `rew_to_dsp8000.py
-monitor`/`sysex`). Ren stdlib, ingen MIDI.
+monitor`/`sysex`/`probe`). Ren stdlib, ingen MIDI.
 
     python syx_tools.py hex  dump.syx [--start 0 --length 256]
-    python syx_tools.py diff a.syx b.syx          # vilka byte skiljer + 8-bytegrupper
-    python syx_tools.py geq  dump.syx [--offset 61]  # tolka 8-byte/band-grupper
+    python syx_tools.py geq  dump.syx            # de 31+31 grafiska banden i dB
+    python syx_tools.py diff a.syx b.syx         # råa byte + GEQ-banden som ändrats
 
-Vad vi vet om SND MEMORY DUMP (00 20 32 00 01 4F 12 ...), se midi_captures.txt:
-  * 12110 databyte, alla < 128.
-  * Grupper om 8 byte: 7 byte med bitvikter [64,32,16,8,4,2,1] + 1 separator (0).
-    Bandvärde = summan = 0..127, samma skala som CC (64 = 0 dB, 0,25 dB/steg).
-  * Bara ~9 sådana grupper (offset 61..135 i filen) har hittills setts ändras,
-    så hela blocklayouten (31+31 band, master, PEQ, 100 program) är INTE känd.
-Verktyget finns för att nästa capture-omgång ska gå att analysera reproducerbart
-i stället för för hand.
+SND MEMORY DUMP / SysEx-svar (`F0 00 20 32 00 01 4F 0A|12 …  F7`):
+  * 10-byte header, sedan 12100 databyte, alla < 128 (7-bit-safe) men BIT-PACKAT.
+  * GEQ-blocket är avkodat (verifierat mot enheten 2026-09-02, `probe`):
+    databyten packas MSB-först till en bitström; från bit-offset GEQ_BIT_OFFSET
+    ligger 64 tecknade 8-bitarsvärden: 31 vänster band (20 Hz–20 kHz), vänster
+    master, 31 höger band, höger master. Värde = CC − 64 = kvarts-dB-steg,
+    −64…+63 ⇒ −16,00…+15,75 dB (dB = värde / 4). Samma för sub-kod 4F 0A och 4F 12.
+  * Resten (PEQ, delay, gate, limiter, 100 program) är inte kartlagt - men
+    `probe` gör fler kontrollerade captures reproducerbara om det behövs.
 """
 import argparse
 from pathlib import Path
 
 import dsp8000
 
-BIT_WEIGHTS = [64, 32, 16, 8, 4, 2, 1]
+DUMP_HEADER_LEN = 10          # 00 20 32 00 01 4F xx yy 20 00
+GEQ_BIT_OFFSET = 373          # bit-offset till första bandet i den MSB-packade strömmen
+GEQ_COUNT = 64               # 31 vä band + vä master + 31 hö band + hö master
 
 
 def load(path):
@@ -28,6 +31,30 @@ def load(path):
     if b[:1] != b"\xf0" or b[-1:] != b"\xf7":
         raise SystemExit(f"{path}: inte en komplett SysEx (F0 ... F7).")
     return b
+
+
+def is_memory_dump(b):
+    return b[1:6].hex() == "0020320001" and b[6] == 0x4F
+
+
+def _msb_bits(data):
+    """7-bitars MIDI-byte -> bitlista, MSB först per byte."""
+    return [(byte >> i) & 1 for byte in data for i in (6, 5, 4, 3, 2, 1, 0)]
+
+
+def decode_geq(b):
+    """Komplett SysEx (med F0/F7) -> {'L': [31 dB], 'L_master': v, 'R': [...], 'R_master': v}.
+    dB, redan delat med 4. master returneras rått (CC-lik skala, ej verifierad)."""
+    bits = _msb_bits(b[1 + DUMP_HEADER_LEN:-1])
+    vals = []
+    for n in range(GEQ_COUNT):
+        p = GEQ_BIT_OFFSET + 8 * n
+        v = 0
+        for i in range(8):
+            v = (v << 1) | bits[p + i]
+        vals.append(v - 256 if v >= 128 else v)
+    return {"L": [v / 4 for v in vals[:31]], "L_master": vals[31],
+            "R": [v / 4 for v in vals[32:63]], "R_master": vals[63]}
 
 
 def hexdump(b, start=0, length=None, width=16):
@@ -38,21 +65,24 @@ def hexdump(b, start=0, length=None, width=16):
               + "  " + " ".join(f"{x:3d}" for x in chunk))
 
 
-def decode_groups(b, offset, count=None):
-    """Tolka 8-byte-grupper från offset: -> [(offset, värde, ok)]. ok = False om
-    någon byte inte är exakt sin bitvikt (då är det inte ett packat bandvärde)."""
-    out = []
-    pos = offset
-    while pos + 8 <= len(b) - 1 and (count is None or len(out) < count):
-        g = b[pos:pos + 8]
-        ok = all(x in (0, w) for x, w in zip(g[:7], BIT_WEIGHTS)) and g[7] == 0
-        out.append((pos, sum(g[:7]), ok))
-        pos += 8
-    return out
+def _print_geq(g):
+    for name in ("L", "R"):
+        cells = " ".join(f"{d:+5.2f}" for d in g[name])
+        print(f"  {name} ({g[name + '_master']:+d} master): {cells}")
 
 
 def cmd_hex(args):
     hexdump(load(args.file), args.start, args.length)
+
+
+def cmd_geq(args):
+    b = load(args.file)
+    if not is_memory_dump(b):
+        raise SystemExit("Inte en minnesdump (F0 00 20 32 00 01 4F …). "
+                         "Fader-frames (33 09) läses av rew_to_dsp8000.py monitor.")
+    print(f"{args.file}: {len(b)} byte, sub-kod {b[6]:02x} {b[7]:02x}")
+    print(f"31 ISO-band: {', '.join(f'{f:g}' for f in dsp8000.ISO_BANDS)} Hz")
+    _print_geq(decode_geq(b))
 
 
 def cmd_diff(args):
@@ -69,26 +99,20 @@ def cmd_diff(args):
         print(f"  {i:6d}: {a[i]:3d} -> {b[i]:3d}")
     if len(idx) > args.max:
         print(f"  ... ({len(idx) - args.max} till, --max höjer)")
-    # 8-byte-grupper i det ändrade spannet, båda tolkningarna
-    start = idx[0] - (idx[0] - args.offset) % 8
-    print(f"\n8-byte-grupper från offset {start} (a -> b), värde 0..127 = CC-skala:")
-    for (pa, va, oka), (pb, vb, okb) in zip(
-            decode_groups(a, start), decode_groups(b, start)):
-        if pa > idx[-1]:
-            break
-        flag = "" if oka and okb else "  (ej ren bitviktsgrupp)"
-        print(f"  {pa:6d}: {va:3d} -> {vb:3d}   "
-              f"{dsp8000.cc_to_db(va):+6.2f} -> {dsp8000.cc_to_db(vb):+6.2f} dB{flag}")
-
-
-def cmd_geq(args):
-    b = load(args.file)
-    print(f"{args.file}: {len(b)} byte, header {b[1:11].hex(' ')}")
-    for pos, val, ok in decode_groups(b, args.offset, args.count):
-        if not ok and not args.all:
-            continue
-        print(f"  {pos:6d}: {val:3d}  {dsp8000.cc_to_db(val):+6.2f} dB"
-              + ("" if ok else "  (ej ren bitviktsgrupp)"))
+    if is_memory_dump(a) and is_memory_dump(b):
+        ga, gb = decode_geq(a), decode_geq(b)
+        print("\nGEQ-band som ändrats (dB):")
+        hit = False
+        for name in ("L", "R"):
+            for j, (x, y) in enumerate(zip(ga[name], gb[name])):
+                if x != y:
+                    hit = True
+                    print(f"  {name} {dsp8000.ISO_BANDS[j]:>7g} Hz: {x:+.2f} -> {y:+.2f}")
+            if ga[name + "_master"] != gb[name + "_master"]:
+                hit = True
+                print(f"  {name} master: {ga[name+'_master']} -> {gb[name+'_master']}")
+        if not hit:
+            print("  (inga - ändringen ligger utanför GEQ-blocket)")
 
 
 def main():
@@ -97,14 +121,11 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     h = sub.add_parser("hex"); h.add_argument("file")
     h.add_argument("--start", type=int, default=0); h.add_argument("--length", type=int)
+    g = sub.add_parser("geq"); g.add_argument("file")
     d = sub.add_parser("diff"); d.add_argument("a"); d.add_argument("b")
     d.add_argument("--max", type=int, default=80)
-    d.add_argument("--offset", type=int, default=61, help="första kända gruppstart")
-    g = sub.add_parser("geq"); g.add_argument("file")
-    g.add_argument("--offset", type=int, default=61); g.add_argument("--count", type=int)
-    g.add_argument("--all", action="store_true", help="visa även icke-bitviktsgrupper")
     args = p.parse_args()
-    {"hex": cmd_hex, "diff": cmd_diff, "geq": cmd_geq}[args.cmd](args)
+    {"hex": cmd_hex, "geq": cmd_geq, "diff": cmd_diff}[args.cmd](args)
 
 
 if __name__ == "__main__":

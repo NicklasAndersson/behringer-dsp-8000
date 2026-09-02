@@ -33,6 +33,7 @@ except ImportError:  # fit_scale m.m. är ren matte; bara MIDI-kommandona behöv
     mido = None
 
 import dsp8000
+import syx_tools
 
 JSON_FILE = Path("rew_eq_suggestion.json")
 PORT_HINT = "AudioBox"   # delsträng; DSP8000 hänger på AudioBoxens MIDI-ut
@@ -131,6 +132,90 @@ def _collect(inp, wait_s=8.0, quiet_s=1.0):
     return msgs
 
 
+def grab_dump(out, inp, req=(0x70, 0x01)):
+    """Skicka en SysEx-förfrågan (modell 0x01) och returnera dumpens databyte
+    (utan F0/F7), eller None om enheten inte svarade. Ändrar inget på enheten."""
+    list(inp.iter_pending())
+    _send_sysex(out, 0x00, 0x01, list(req))
+    for m in _collect(inp, wait_s=12.0):
+        if m.type == "sysex" and len(m.data) > 1000:
+            return bytes(m.data)
+    return None
+
+
+def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64):
+    """Kontrollerad capture: dumpa, sätt ETT GEQ-band via CC, dumpa igen, visa
+    vilka byte i dumpen som ändrades. Det här är verktyget för att kartlägga
+    den packade dumpens layout (midi_captures.txt: "FÖR ATT KNÄCKA HELA
+    LAYOUTEN"). restore = CC-värde att skicka tillbaka efteråt (64 = 0 dB;
+    None = lämna bandet på `value`)."""
+    cc_num = cc_map(channel)[band_freq]
+    ts = time.strftime("%H%M%S")
+    before_f = Path(f"probe_{band_freq:g}Hz_{channel}_before_{ts}.syx")
+    after_f = Path(f"probe_{band_freq:g}Hz_{channel}_after_cc{value}_{ts}.syx")
+    with open_output() as out, open_input() as inp:
+        print("Dump 1/2 (före)...")
+        before = grab_dump(out, inp)
+        if before is None:
+            raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
+                             "enheten på EQ-huvudskärmen.")
+        print(f"  CC {cc_num} = {value}  ({band_freq:g} Hz {channel}, "
+              f"{dsp8000.cc_to_db(value):+.2f} dB)")
+        out.send(mido.Message("control_change", channel=midi_channel - 1,
+                              control=cc_num, value=value))
+        time.sleep(0.3)
+        print("Dump 2/2 (efter)...")
+        after = grab_dump(out, inp)
+        if after is None:
+            raise SystemExit("Andra dumpen kom inte. Enheten kanske bytte skärm.")
+        if restore is not None:
+            out.send(mido.Message("control_change", channel=midi_channel - 1,
+                                  control=cc_num, value=restore))
+            print(f"  återställde CC {cc_num} = {restore}")
+    before_f.write_bytes(b"\xf0" + before + b"\xf7")
+    after_f.write_bytes(b"\xf0" + after + b"\xf7")
+    print(f"\n{before_f}\n{after_f}")
+
+    n = min(len(before), len(after))
+    diff = [i for i in range(n) if before[i] != after[i]]
+    if len(before) != len(after):
+        print(f"OBS olika längd: {len(before)} vs {len(after)}")
+    if not diff:
+        print("\nIngen byte ändrades — CC:t nådde inte enheten, eller dumpen "
+              "speglar inte working buffer. Kolla CNTL RCV = CC_OFFSET.")
+        return
+    hdr = 10  # 10-byte dump-header före databyten
+    print(f"\n{len(diff)} byte ändrades, dump-offset {diff[0]}..{diff[-1]} "
+          f"(data-offset {diff[0]-hdr}..{diff[-1]-hdr}):")
+    for i in diff:
+        print(f"  data[{i-hdr:5d}]  {before[i]:3d} -> {after[i]:3d}")
+    ga = syx_tools.decode_geq(b"\xf0" + before + b"\xf7")
+    gb = syx_tools.decode_geq(b"\xf0" + after + b"\xf7")
+    for name in ("L", "R"):
+        for j, (x, y) in enumerate(zip(ga[name], gb[name])):
+            if x != y:
+                print(f"  GEQ {name} {dsp8000.ISO_BANDS[j]:g} Hz: {x:+.2f} -> {y:+.2f} dB")
+
+
+def _geq_from_dump(payload):
+    return syx_tools.decode_geq(b"\xf0" + payload + b"\xf7")
+
+
+def readback():
+    """Hämta dumpen på begäran (ingen fader-nudge) och skriv ut de 31+31
+    grafiska banden i dB. Ändrar inget. Kräver båda MIDI-kablarna."""
+    with open_output() as out, open_input() as inp:
+        d = grab_dump(out, inp)
+    if d is None:
+        raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
+                         "enheten på EQ-huvudskärmen.")
+    g = _geq_from_dump(d)
+    for name in ("L", "R"):
+        cells = "  ".join(f"{f:g}:{db:+.2f}" for f, db in zip(dsp8000.ISO_BANDS, g[name]))
+        print(f"{name} (master {g[name+'_master']:+d}): {cells}")
+    return g
+
+
 def sysex_probe(write_test=False):
     """Fråga enheten via SysEx. Se dsp8000_midi_webbresearch.md avsnitt 6/10.
 
@@ -189,9 +274,13 @@ def cc_map(channel):
             else dsp8000.CC_GRAPHIC_RIGHT)
 
 
-def send(channel="both", midi_channel=1, dry_run=False):
+def send(channel="both", midi_channel=1, dry_run=False, verify=False):
     """channel: left/right/both. Med Stereolink AV måste båda kanalerna
-    skickas (samma kurva - REW-mätningen är L+R kombinerad)."""
+    skickas (samma kurva - REW-mätningen är L+R kombinerad).
+
+    verify: hämta dumpen efteråt och jämför varje band mot det skickade
+    (fångar tappade CC direkt - annars syns det först i en REW-sweep).
+    Kräver att returvägen är inkopplad (båda MIDI-kablarna)."""
     gains = load_band_gains()
     if not gains:
         raise SystemExit("Inga bandvärden i JSON:en.")
@@ -203,7 +292,7 @@ def send(channel="both", midi_channel=1, dry_run=False):
         print(f"\n{ch.upper()} kanal, MIDI-kanal {midi_channel}:")
         for f, db in gains.items():
             cc_num, cc_val = ccs[f], dsp8000.db_to_cc(db)
-            plan.append((cc_num, cc_val))
+            plan.append((ch, f, cc_num, cc_val))
             print(f"  {f:>7} Hz  {db:+5.1f} dB  ->  CC {cc_num:>3} = {cc_val:>3}")
 
     if dry_run:
@@ -212,12 +301,29 @@ def send(channel="both", midi_channel=1, dry_run=False):
     if input(f"\nSkicka {len(plan)} CC till enheten? (ja/nej): ").strip().lower() != "ja":
         raise SystemExit("Avbrutet.")
 
-    with open_output() as out:
-        for cc_num, cc_val in plan:
+    with open_output() as out, open_input() as inp:
+        for _, _, cc_num, cc_val in plan:
             out.send(mido.Message("control_change", channel=midi_channel - 1,
                                   control=cc_num, value=cc_val))
             time.sleep(SEND_GAP_S)
-    print(f"Skickade {len(plan)} CC. Verifiera med en ny REW-sweep.")
+        print(f"Skickade {len(plan)} CC.")
+        if not verify:
+            print("Verifiera med en ny REW-sweep.")
+            return
+        time.sleep(0.4)
+        d = grab_dump(out, inp)
+    if d is None:
+        raise SystemExit("--verify: ingen dump kom tillbaka (returväg inkopplad?).")
+    g = _geq_from_dump(d)
+    bad = 0
+    for ch, f, _, cc_val in plan:
+        want = dsp8000.cc_to_db(cc_val)
+        got = g["L" if ch == "left" else "R"][dsp8000.ISO_BANDS.index(f)]
+        if abs(got - want) > 0.5:       # >1 enhetssteg = tappat CC
+            bad += 1
+            print(f"  MISS {ch:5} {f:>7g} Hz: skickade {want:+.2f}, enheten har {got:+.2f} dB")
+    print(f"--verify: {len(plan)-bad}/{len(plan)} band stämmer"
+          + ("" if not bad else f" - {bad} tappade, kör send igen") + ".")
 
 
 def fit_scale(readings):
@@ -268,6 +374,15 @@ def main():
     sub.add_parser("ports")
     sub.add_parser("monitor").add_argument("--seconds", type=int, default=30)
     sub.add_parser("sysex").add_argument("--write-test", action="store_true")
+    sub.add_parser("readback")
+    pb = sub.add_parser("probe")
+    pb.add_argument("--band", type=float, default=1000)
+    pb.add_argument("--value", type=int, default=127, metavar="CC-0-127")
+    pb.add_argument("--channel", choices=["left", "right"], default="left")
+    pb.add_argument("--midi-channel", type=int, default=1, choices=range(1, 17),
+                    metavar="1-16")
+    pb.add_argument("--no-restore", action="store_true",
+                    help="lämna bandet på --value i stället för att skicka 0 dB")
     for name in ("send", "calibrate"):
         sp = sub.add_parser(name)
         sp.add_argument("--midi-channel", type=int, default=1, choices=range(1, 17),
@@ -276,6 +391,8 @@ def main():
             sp.add_argument("--channel", choices=["left", "right", "both"],
                             default="both")  # Stereolink av -> both
             sp.add_argument("--dry-run", action="store_true")
+            sp.add_argument("--verify", action="store_true",
+                            help="hämta dumpen efteråt och kolla att banden landade")
         else:
             sp.add_argument("--channel", choices=["left", "right"], default="left")
             sp.add_argument("--band", type=float, default=1000)
@@ -291,8 +408,13 @@ def main():
         monitor(args.seconds)
     elif args.cmd == "sysex":
         sysex_probe(args.write_test)
+    elif args.cmd == "readback":
+        readback()
+    elif args.cmd == "probe":
+        probe_band(args.band, args.value, args.channel, args.midi_channel,
+                   restore=None if args.no_restore else 64)
     elif args.cmd == "send":
-        send(args.channel, args.midi_channel, args.dry_run)
+        send(args.channel, args.midi_channel, args.dry_run, args.verify)
     elif args.cmd == "calibrate":
         calibrate(args.band, args.channel, args.midi_channel)
 

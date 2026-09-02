@@ -21,9 +21,11 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh ports                  lista MIDI-portar
   ./run.sh monitor                lyssna på vad DSP8000 skickar (returväg)
   ./run.sh sysex                  fråga enheten via SysEx (dumpar minnet, se readme avsnitt 6)
+  ./run.sh readback               läs enhetens grafiska EQ ur dumpen, skriv i dB (ändrar inget)
+  ./run.sh probe [--band N --value CC]  dumpa, sätt ett band, dumpa, diffa (kartlägg dumpen)
   ./run.sh calibrate              kalibrera CC->dB mot enhetens display, en gång per enhet
   ./run.sh send --dry-run         visa vilka CC som skulle skickas, utan att skicka
-  ./run.sh send                   skicka de 31 bandvärdena till DSP8000 (frågar först)
+  ./run.sh send [--verify]        skicka de 31 bandvärdena (frågar först); --verify läser tillbaka
 
 Övrigt:
   ./run.sh show                   generera + öppna dsp8000_config.html ur rew_eq_suggestion.json
@@ -44,7 +46,7 @@ fi
 .venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
 
 case "$1" in
-  ports|monitor|sysex|calibrate|send)
+  ports|monitor|sysex|readback|probe|calibrate|send)
     exec .venv/bin/python rew_to_dsp8000.py "$@" ;;
   show)
     shift; exec .venv/bin/python show_config.py "$@" ;;

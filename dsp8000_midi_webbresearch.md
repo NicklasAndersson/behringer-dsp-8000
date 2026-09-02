@@ -357,18 +357,22 @@ F0 00 20 32 00 0E 11 00 xx 11 20 xx F7
 - Utlöses från MIDI SETUP-sidan med `+/–`. Skickar hela minnet på MIDI OUT,
   kan spelas in i en sekvenser och laddas tillbaka med `RCV MEMORY DUMP`.
 - **Testenhetens dump:** 12110 byte (payload). Header 10 byte
-  `00 20 32 00 01 4F 12 00 20 00` (`4F` = dump), sedan 100 × 121 byte.
-  Om ett separat working-buffer-block ingår är oklart – 10 + 100×121 = 12110
-  går jämnt ut utan ett. **Bit-packat / proprietärt.**
+  `00 20 32 00 01 4F <sub> 20 00` (`4F` = dump; `sub` = `12` från knappen,
+  `0A` från `70`-förfrågan), sedan 12100 databyte, alla < 128 men
+  **bit-packat**. 12100 = 100 × 121 går jämnt ut, men en signatur upprepas
+  med delta 160 (inte 121) → "100 × 121"-blockhypotesen är **inte**
+  bekräftad. ~95 % nollor i de committade dumparna (nästan tom enhet).
 - **Samma dump via SysEx-förfrågan** (`F0 00 20 32 00 01 70 xx F7`, se
   avsnitt 10) men med sub-kod `4F 0A` istället för `4F 12`. Skiljer sig
   annars bara på ~84 byte i header + första programblocket; de 100 sparade
   programmen är bit-identiska. Sparad: `dsp8000_sysex_ondemand.syx`.
-- **GEQ-bandformatet delvis knäckt** (`midi_captures.txt`, diff
-  `dsp8000_sysex_m16db.syx` vs `..._p16db.syx`): 8 byte/band, 7 st med
-  bitvikter `[64,32,16,8,4,2,1]` + 1 separator, bandvärde = summan (0–127),
-  skala `(dB+16)×4`. Hela blocklayouten (var master, PEQ, delay osv. ligger)
-  är **inte** kartlagd.
+- **GEQ-bandformatet avkodat** (`rew_to_dsp8000.py probe`, verifierat mot
+  enheten 2026-09-02, se `syx_tools.py`): databyten packas upp **MSB-först**
+  till en bitström; från **bit-offset 373** ligger **64 tecknade
+  8-bitarsvärden** — 31 vä band, vä master, 31 hö band, hö master. Bandvärde
+  = **CC − 64** (kvarts-dB, `dB = värde/4`, −16,00…+15,75). Samma för `4F 0A`
+  och `4F 12`. Den tidigare "8 byte/band med bitvikter"-tolkningen var fel.
+  PEQ/delay/master-skala/de 100 programmen är **inte** kartlagda.
 - Den **läsbara** GEQ-statusframen (skickas vid fader-rörelse, inte på
   begäran): `F0 00 20 32 00 01 33 09 <32 vä> <32 hö> F7`, position 0–30 =
   band, 31 = master, `64` (0x40) = 0 dB.
@@ -438,18 +442,21 @@ kablarna, MIDI ON, EXCL SND+RCV ON, enheten på EQ-huvudskärmen).
 
 ### Vad vi faktiskt vann
 
-1. **Dump på begäran utan fader-nudge.** `F0 00 20 32 00 01 70 01 F7` →
-   full dump. `rew_to_dsp8000.py` skulle kunna hämta dumpen *efter* en
-   CC-skrivning och jämföra GEQ-banden mot det skickade – men bara om det
-   8-byte/band-packade GEQ-formatet (delvis knäckt i `midi_captures.txt`)
-   avkodas helt. **Fortfarande sannolikt inte värt det** – en REW-sweep
-   säger mer och är redan arbetsflödet.
+1. **Dump på begäran utan fader-nudge + GEQ-återläsning.**
+   `F0 00 20 32 00 01 70 01 F7` → full dump. GEQ-blocket är nu **avkodat**
+   (bit-offset 373, 64 × 8-bit tecknat, `dB = v/4` – avsnitt 7), så
+   `rew_to_dsp8000.py send --verify` hämtar dumpen efter en CC-skrivning och
+   rapporterar band som inte landade – utan REW-sweep. `readback` läser ut
+   nuläget, `probe` gör kontrollerade captures. En REW-sweep behövs
+   fortfarande för det **akustiska** resultatet, inte för att se vad enheten
+   tog emot.
 2. **Bekräftat att returvägen fungerar stabilt** med båda kablarna i.
 
 ### Vad som är dödt
 
 - Realtids-PEQ via MIDI: nej (varken CC eller SysEx på denna enhet).
-- Granulär GEQ-läsning: nej.
+- Granulär GEQ-läsning: nej – men hela dumpen kan hämtas på begäran och
+  GEQ-banden avkodas ur den (avsnitt 7), vilket räcker för `send --verify`.
 - EQ-Design-mjukvaran skulle möjligen prata med enheten (den använder
   troligen just `4F`-dumpen fram och tillbaka), men mjukvaran är svår att
   få tag på och tillför inget som CC-vägen + REW inte redan ger.
