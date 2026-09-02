@@ -332,8 +332,9 @@ på nivåer ändå). Sedan:
 2. skriptet sätter equaliser → Generic och match target settings
    (`20–300 Hz`, `individualMaxBoost 3 dB`, `overallMaxBoost 0 dB`), kör
    `Calculate target level` + `Match target` — allt via API. **Målkurvans
-   form** (tilt/house curve/LF cutoff, avsnitt 5) sätts *inte* av skriptet —
-   ställ in den i REW:s Target Settings innan
+   form** (tilt/house curve/LF cutoff, avsnitt 5) sätts som *default* inte
+   av skriptet — men går att sätta via API i stället för att klicka i REW:s
+   GUI varje varv, se `--show-target`/`--target`/`--house-curve` nedan
 3. läser ut de parametriska filtren, **behåller de 3 PK‑filter med störst
    |gain|** (`dsp8000.PEQ_COUNT`; shelf‑filter kastas, de kan inte göras på
    enheten) och skriver tillbaka dem till REW — DSP8000 har bara 3 PEQ, och
@@ -360,6 +361,32 @@ mot rå `/frequency-response`) adderas ovanpå bandvärdena i befintlig
 `rew_eq_suggestion.json`; PEQ‑listan följer med oförändrad. Grannband i en
 1/3‑oktavs‑EQ läcker in i varandra, så första varvets (target − respons)
 överkorrigerar alltid lite — ett eller två refine‑varv är hur man konvergerar.
+
+**Sätta målkurvan via API (snabbare iteration, slipp REW:s GUI varje varv):**
+
+```sh
+python rew_script.py --show-target                     # skriv ut REW:s riktiga fältnamn, avsluta
+python rew_script.py --target lowFreqCutoffHz=25 --target slopedBOct=1.0 --yes
+python rew_script.py --house-curve /sökväg/till/kurva.txt --yes
+python rew_script.py --clear-house-curve --yes
+```
+
+`--target KEY=VÄRDE` (kan upprepas) läser mätningens nuvarande
+`target-settings` (GET), skriver in nycklarna du anger ovanpå (allt annat
+REW redan satt bevaras) och skickar tillbaka (POST) — innan
+`Calculate target level` körs. Fälten är **REW:s egna** och API:t
+dokumenterar dem inte i klartext (`shape`, `lowFreqCutoffHz`, slopes,
+crossover enligt tabellen i avsnitt 7, men den exakta stavningen kan skilja
+mellan REW-versioner) — kör `--show-target` **en gång** mot din egen
+REW-installation för att se de riktiga namnen i stället för att gissa.
+Värden typas automatiskt: `25` → int, `1.0` → float, `true`/`false` → bool,
+annat → sträng.
+
+`--house-curve PATH` / `--clear-house-curve` / `--house-curve-log-interp
+{true,false}` styr `/eq/house-curve` (globalt, inte per mätning) —
+log-interpolation sätts alltid före filen, i den ordning REW:s dokumentation
+anger. Alla tre går att kombinera med `--target`, `--refine` och den
+vanliga körningen i samma kommando.
 
 Beroenden: `pip install requests`
 
@@ -532,8 +559,10 @@ känna till om du satt egna skript ovanpå någon av filerna.
 - Readme motsade sig själv på två ställen: avsnitt 6 säger att returvägen
   fungerar med båda kablarna i, avsnitt 8 sa tidigare att den kräver bara
   en. Och steg 1 påstod att skriptet sätter REW:s "target settings"
-  (målkurvans form) — det gör det inte, bara match‑target‑settings
-  (matchningsområde/max boost); formen ställs fortfarande i REW:s GUI.
+  (målkurvans form) — det gjorde det inte, bara match‑target‑settings
+  (matchningsområde/max boost); formen ställdes i REW:s GUI. Sedan
+  `--show-target`/`--target`/`--house-curve` (nedan) går den formen också
+  att sätta via API, men fortfarande inte som default.
 - De committade `.syx`‑filerna stämmer inte med anteckningarna i
   `midi_captures.txt`: `dsp8000_sysex_m16db.syx` och `..._p16db.syx` är
   byte‑identiska, och `..._0db.syx` har nollor i alla GEQ‑grupper (en av
@@ -544,3 +573,8 @@ Nytt sedan förra versionen: `rew_script.py --refine` (andra varvet, se
 avsnitt 7 och 8), `dsp8000.cc_to_db`/`dsp8000.q_to_octaves`, `syx_tools.py`
 för att analysera `.syx`‑dumpar, `requirements.txt`, samt `run.sh send|show|test`
 som genvägar till `rew_to_dsp8000.py`/`show_config.py`/`test_rew_script.py`.
+
+Nytt i denna version: `--show-target`/`--target KEY=VÄRDE`/`--house-curve`/
+`--clear-house-curve`/`--house-curve-log-interp` i `rew_script.py` (avsnitt 7)
+— sätter målkurvans form via API i stället för REW:s GUI, för snabbare
+iteration mellan mätningar.

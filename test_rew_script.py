@@ -15,11 +15,11 @@ import rew_script as r
 import rew_to_dsp8000 as m   # importerbar utan mido (mido = None då)
 
 r.time.sleep = lambda s: None  # inga riktiga väntetider
-_ORIG = (r.api_get, r.api_post)
+_ORIG = (r.api_get, r.api_post, r.api_delete)
 
 
 def _reset():
-    r.api_get, r.api_post = _ORIG
+    r.api_get, r.api_post, r.api_delete = _ORIG
 
 
 def _curve(points, ppo=48):
@@ -192,6 +192,65 @@ def test_save_and_load_roundtrip():
         assert peq[0]["frequency"] == 44
         m.JSON_FILE = path
         assert m.load_band_gains() == gains
+
+
+def test_coerce_types():
+    assert r._coerce("25") == 25 and isinstance(r._coerce("25"), int)
+    assert r._coerce("1.5") == 1.5
+    assert r._coerce("true") is True and r._coerce("False") is False
+    assert r._coerce("Room") == "Room"
+
+
+def test_parse_kv():
+    import argparse
+    assert r._parse_kv("lowFreqCutoffHz=25") == ("lowFreqCutoffHz", 25)
+    assert r._parse_kv("shape=Manual") == ("shape", "Manual")
+    try:
+        r._parse_kv("no-equals-sign")
+        assert False, "skulle ha kastat ArgumentTypeError"
+    except argparse.ArgumentTypeError:
+        pass
+
+
+def test_set_target_settings_merges_onto_existing():
+    sent = {}
+    r.api_get = lambda p: {"shape": "Manual", "lowFreqCutoffHz": 20, "slopedBOct": 0.0}
+    r.api_post = lambda p, b: sent.update({"path": p, "body": b}) or {}
+    merged = r.set_target_settings("1", {"lowFreqCutoffHz": 25})
+    assert merged == {"shape": "Manual", "lowFreqCutoffHz": 25, "slopedBOct": 0.0}
+    assert sent["path"] == "/measurements/1/target-settings"
+    assert sent["body"] == merged
+
+
+def test_set_target_settings_noop_without_overrides():
+    r.api_get = lambda p: (_ for _ in ()).throw(AssertionError("skulle inte läsa"))
+    r.api_post = lambda p, b: (_ for _ in ()).throw(AssertionError("skulle inte skriva"))
+    assert r.set_target_settings("1", {}) is None
+    assert r.set_target_settings("1", None) is None
+
+
+def test_set_house_curve_order_and_endpoints():
+    calls = []
+    r.api_post = lambda p, b: calls.append(("POST", p, b)) or {}
+    r.api_delete = lambda p: calls.append(("DELETE", p, None))
+    r.set_house_curve(path="/tmp/curve.txt", clear=True, log_interpolation=True)
+    # log-interpolation ska sättas FÖRE filen (REW:s dokumenterade ordning)
+    assert calls == [
+        ("POST", "/eq/house-curve-log-interpolation", True),
+        ("DELETE", "/eq/house-curve", None),
+        ("POST", "/eq/house-curve", "/tmp/curve.txt"),
+    ], calls
+
+
+def test_run_match_target_applies_target_overrides():
+    calls = []
+    r.api_post = lambda p, b: calls.append((p, b)) or {"message": "done"}
+    r.api_get = lambda p: {"shape": "Manual"}
+    r.run_match_target("1", peq=False, target_overrides={"shape": "Room"})
+    posted_paths = [p for p, _ in calls]
+    assert "/measurements/1/target-settings" in posted_paths
+    target_body = dict(calls)["/measurements/1/target-settings"]
+    assert target_body == {"shape": "Room"}
 
 
 def test_fit_scale_recovers_known_line():

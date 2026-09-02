@@ -13,8 +13,20 @@ Skriptet kan sedan, via REW:s HTTP-API:
 Allt utom sweepen går alltså via API:t - ingen GUI-klickning behövs efter
 mätningen. Verifierat mot REW API 0.9.0 (V5.40 beta 101). Kräver INTE REW Pro.
 
-Målkurvans form (tilt/house curve, LF cutoff) sätts INTE här - ställ in den
-i REW:s Target Settings innan du kör; skriptet räknar bara ut target-nivån.
+Målkurvans form (tilt/house curve, LF cutoff) sätts som DEFAULT inte här -
+skriptet räknar bara ut target-nivån mot vad som redan står i REW:s Target
+Settings. Men för snabbare iteration går den att sätta via API också:
+
+    python rew_script.py --show-target              # se REW:s riktiga fältnamn
+    python rew_script.py --target lowFreqCutoffHz=25 --target slopedBOct=1.0 --yes
+    python rew_script.py --house-curve /path/till/kurva.txt --yes
+    python rew_script.py --clear-house-curve --yes
+
+`--target` är en generisk KEY=VÄRDE-overlay ovanpå det REW redan har (GET,
+uppdatera nycklarna, POST) - fältnamnen är REW:s egna och skiljer sig
+troligen mellan REW-versioner, därför gissar vi inte på dem här. Kör
+`--show-target` en gång mot din REW-installation för att se exakt vad
+som finns att sätta.
 
 Andra varvet (--refine): mät om MED EQ:n aktiv och kör
     python rew_script.py --refine
@@ -60,6 +72,12 @@ def api_post(path, body):
     r = requests.post(f"{REW}{path}", json=body, timeout=30)
     r.raise_for_status()
     return r.json()
+
+
+def api_delete(path):
+    r = requests.delete(f"{REW}{path}", timeout=10)
+    r.raise_for_status()
+    return r.json() if r.content else None
 
 
 def check_api_alive():
@@ -141,12 +159,43 @@ def eq_command(measurement_id, command):
     raise SystemExit(f"'{command}' blev inte klar inom tidsgränsen.")
 
 
-def run_match_target(measurement_id, peq=True):
-    """Sätt equaliser + match target settings, rikta in target-nivån, och
-    (om peq) kör Match target som genererar de parametriska filtren.
-    Målkurvans FORM (target-settings/house curve) rörs inte - den ställs i REW."""
+def get_target_settings(measurement_id):
+    return api_get(f"/measurements/{measurement_id}/target-settings")
+
+
+def set_target_settings(measurement_id, overrides):
+    """Läs mätningens nuvarande target-settings, skriv in overrides ovanpå
+    (bevarar allt annat REW redan satt), skicka tillbaka. Overrides fältnamn
+    är REW:s egna - se --show-target. Returnerar det sammanslagna objektet."""
+    if not overrides:
+        return None
+    merged = {**get_target_settings(measurement_id), **overrides}
+    api_post(f"/measurements/{measurement_id}/target-settings", merged)
+    print(f"Target settings uppdaterade: {json.dumps(overrides, ensure_ascii=False)}")
+    return merged
+
+
+def set_house_curve(path=None, clear=False, log_interpolation=None):
+    """/eq/house-curve (global, inte per mätning). log_interpolation måste
+    sättas INNAN filen enligt REW:s dokumentation."""
+    if log_interpolation is not None:
+        api_post("/eq/house-curve-log-interpolation", log_interpolation)
+    if clear:
+        api_delete("/eq/house-curve")
+        print("House curve borttagen.")
+    if path:
+        api_post("/eq/house-curve", path)
+        print(f"House curve satt: {path}")
+
+
+def run_match_target(measurement_id, peq=True, target_overrides=None):
+    """Sätt equaliser + ev. target-settings-overlay + match target settings,
+    rikta in target-nivån, och (om peq) kör Match target som genererar de
+    parametriska filtren. Utan target_overrides rörs målkurvans FORM inte -
+    den är då vad REW redan hade satt (GUI eller tidigare API-anrop)."""
     api_post(f"/measurements/{measurement_id}/equaliser",
              {"manufacturer": "Generic", "model": "Generic"})
+    set_target_settings(measurement_id, target_overrides)
     api_post("/eq/match-target-settings", MATCH_TARGET_SETTINGS)
     eq_command(measurement_id, "Calculate target level")
     if peq:
@@ -272,9 +321,30 @@ def save_output(measurement, filters, band_gains, path=OUTPUT_FILE):
     print(f"Skrev {len(filters)} PEQ-filter + {len(band_gains)} band till {path}")
 
 
+def _parse_kv(s):
+    """'KEY=VÄRDE' -> (KEY, värde), värdet typat (bool/int/float/sträng)."""
+    import argparse
+    key, sep, raw = s.partition("=")
+    if not sep or not key:
+        raise argparse.ArgumentTypeError(f"förväntade KEY=VÄRDE, fick {s!r}")
+    return key, _coerce(raw)
+
+
+def _coerce(raw):
+    if raw.lower() in ("true", "false"):
+        return raw.lower() == "true"
+    for kind in (int, float):
+        try:
+            return kind(raw)
+        except ValueError:
+            pass
+    return raw
+
+
 def main():
     import argparse
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--no-peq", action="store_true",
                     help="hoppa över de parametriska filtren, bara 31-bands grafisk EQ")
     ap.add_argument("--refine", action="store_true",
@@ -284,12 +354,37 @@ def main():
                     help="REW:s mätnings-id (nyckeln i GET /measurements) i stället för att fråga")
     ap.add_argument("--yes", "-y", action="store_true",
                     help="fråga inte, kör Match target via API direkt")
+    ap.add_argument("--show-target", action="store_true",
+                    help="skriv ut mätningens nuvarande target-settings (REW:s egna "
+                         "fältnamn) som JSON och avsluta - kör en gång innan --target")
+    ap.add_argument("--target", action="append", default=[], metavar="KEY=VÄRDE",
+                    type=_parse_kv,
+                    help="sätt ett fält i target-settings via API (GET, uppdatera, POST) "
+                         "innan Calculate target level. Kan upprepas. Se --show-target "
+                         "för giltiga fältnamn.")
+    ap.add_argument("--house-curve", metavar="PATH",
+                    help="sökväg till en house curve-fil (/eq/house-curve, global)")
+    ap.add_argument("--clear-house-curve", action="store_true",
+                    help="ta bort ev. house curve (DELETE /eq/house-curve)")
+    ap.add_argument("--house-curve-log-interp", choices=["true", "false"],
+                    help="/eq/house-curve-log-interpolation - sätts före --house-curve")
     args = ap.parse_args()
+    target_overrides = dict(args.target)
 
     check_api_alive()
+
+    if args.house_curve or args.clear_house_curve or args.house_curve_log_interp:
+        set_house_curve(args.house_curve, args.clear_house_curve,
+                        None if args.house_curve_log_interp is None
+                        else args.house_curve_log_interp == "true")
+
     measurement = (find_measurement(args.measurement) if args.measurement
                    else pick_measurement_interactively())
     measurement_id = measurement["id"]
+
+    if args.show_target:
+        print(json.dumps(get_target_settings(measurement_id), indent=2, ensure_ascii=False))
+        return
 
     if args.refine:
         # Enhetens EQ (grafisk + ev. PEQ) sitter redan i mätningen: räkna
@@ -298,13 +393,14 @@ def main():
         print(f"Refine: utgår från {len(base)} band + {len(prev_filters)} PEQ i {OUTPUT_FILE}.")
         api_post(f"/measurements/{measurement_id}/equaliser",
                  {"manufacturer": "Generic", "model": "Generic"})
+        set_target_settings(measurement_id, target_overrides)
         eq_command(measurement_id, "Calculate target level")
         save_output(measurement, prev_filters,
                     graphic_band_gains(measurement_id, after_peq=False, base=base))
         return
 
     if args.yes or input("Kör Match target via API nu? (j/n): ").strip().lower().startswith("j"):
-        run_match_target(measurement_id, peq=not args.no_peq)
+        run_match_target(measurement_id, peq=not args.no_peq, target_overrides=target_overrides)
     elif not args.no_peq:
         print("Antar att du redan kört Match target i REW.")
 
