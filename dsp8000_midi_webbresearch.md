@@ -19,16 +19,19 @@ Nyttan som blev kvar: dumpen kan hämtas **på begäran utan fader-nudge**.
 
 ## 0. TL;DR – det viktigaste
 
-1. **Tre olika MIDI-implementationer finns**, beroende på operativsystem:
-   - **DSP8000 OS < 2.0** (manual V1.3, 1996): fast CC-mappning **64–127**,
-     `MIDI OUT` "har ingen funktion", **ingen SysEx**, ingen memory dump-sida.
-   - **DSP8000 OS ≥ 2.0** och **DSP8024 OS ≥ 1.1**: justerbar
-     **Controller Offset 0–64**, `MIDI OUT` skickar programdata + status,
-     **SysEx skickas och tas emot**, `SND/RCV MEMORY DUMP` på MIDI-sidan,
-     fungerar med EQ-Design-mjukvaran. **Detta matchar testenheten.**
-   - **DSP8024** har dessutom ett fullständigt realtids-SysEx-protokoll
-     (reverse-engineerat av ADRStudio, se avsnitt 6) som når limiter, gate,
-     delay, parametriska filter och hela RTA-sektionen – långt mer än CC.
+1. **MIDI-implementationen skiljer sig mellan OS-versioner:**
+   - **DSP8000 med 1996-OS** (manual V1.3): fast CC-mappning **64–127**,
+     `MIDI OUT` "har ingen funktion", MIDI-chart säger **ingen SysEx**,
+     ingen memory dump-sida.
+   - **DSP8000 med nyare OS** + **DSP8024**: justerbar **Controller
+     Offset 0–64**, `MIDI OUT` skickar programdata + status, **SysEx
+     skickas och tas emot**, `SND/RCV MEMORY DUMP` på MIDI-sidan.
+     **Detta matchar testenheten.** (EQ-Design-mjukvaran kräver DSP8000
+     OS ≥ V2.0 / DSP8024 OS ≥ V1.1 – exakt när SysEx tillkom är inte
+     bekräftat, men vår enhet har det.)
+   - **DSP8024** har dessutom ett granulärt realtids-SysEx-protokoll
+     (ADRStudio, avsnitt 6) för limiter, gate, delay, parametriska filter
+     och RTA. **Det protokollet svarar inte vår DSP8000** (avsnitt 10).
 
 2. **CC-mappning (offset 0):** `CC 0–30` = vänster GEQ 20 Hz…20 kHz,
    `CC 31` = vänster master, `CC 32–62` = höger GEQ, `CC 63` = höger master.
@@ -37,23 +40,24 @@ Nyttan som blev kvar: dumpen kan hämtas **på begäran utan fader-nudge**.
 
 3. **SysEx-header:** `F0 00 20 32 <dd> <mm> <cmd…> F7`.
    `00 20 32` = Behringers manufacturer-ID. `dd` = device (00 = adresserad,
-   7F = broadcast). `mm` = **modell-ID: `0E` = DSP8024, `01` = DSP8000**
-   (enligt våra egna captures – ADRStudio:s lista använder genomgående `0E`).
-   → ADRStudio:s DSP8024-kommandon är värda att prova mot DSP8000 med `0E`
-   utbytt mot `01`.
+   7F = broadcast). `mm` = modell-ID (inferens): **`01` = DSP8000, `0E` =
+   DSP8024**. Vår enhet svarar bara på `01` och ignorerar `0E` helt
+   (testat, avsnitt 10). ADRStudio:s lista använder genomgående `0E`.
 
-4. **Störst nytta för projektet** (se avsnitt 10): ADRStudio dokumenterar
-   `F0 00 20 32 7F 0E 70 10 1F F7` = "läs alla 31 vänster-band" **utan
-   fader-nudge**, plus realtidsskrivning av parametriska filter. Om samma
-   sak funkar med `01` slipper vi både den packade dumpen och fader-nudgen.
+4. **ADRStudio:s DSP8024-protokoll (avsnitt 6) fungerar INTE på vår DSP8000.**
+   Testat 2026-09-02: modellbyte `0E` → inget svar; `01` + valfri
+   `70`-förfrågan → hela den packade minnesdumpen (~12110 byte, ~5 s), aldrig
+   ADRStudio:s korta svar. Behåll avsnitt 6 som **DSP8024-referens**.
+   Enda praktiska vinsten: dumpen kan hämtas **på begäran utan fader-nudge**
+   med `F0 00 20 32 00 01 70 01 F7`.
 
 ---
 
 ## 1. Modellskillnader (MIDI-relevanta)
 
-| | DSP8000 (V1.3, 1996) | DSP8000 OS ≥ 2.0 / DSP8024 |
+| | DSP8000 (1996-OS, manual V1.3) | DSP8000 (nyare OS) / DSP8024 |
 |---|---|---|
-| AD/DA | 20-bit | 24-bit (8024) |
+| AD/DA | 20-bit (DSP8000) | 24-bit (DSP8024) |
 | Parametriska filter | 3 per kanal (6 tot.) | 3 per kanal (6 tot.) |
 | GEQ | 31-band 1/3-oktav, ±16 dB / 0,5 dB-steg | samma |
 | MIDI-kanal | OFF, ALL, 1–16 | OFF, ALL (Omni), 1–16 |
@@ -63,9 +67,9 @@ Nyttan som blev kvar: dumpen kan hämtas **på begäran utan fader-nudge**.
 | Memory dump-sida | finns ej | `SND/RCV MEMORY DUMP` |
 | PC-editor | – | EQ-Design / UltraCurve Design |
 
-> Sound on Sound-recensionen (av 1996-modellen) skrev *"no data is output
-> over MIDI, so there is no way to store SysEx dumps"*. Det gäller det
-> gamla OS:et – testenheten dumpar (12110 byte), alltså nyare firmware.
+> Sound on Sound-recensionen (av 1996-modellen) skrev att ingen data kom
+> ut via MIDI och att SysEx-dumpar därför inte gick att spara. Det gällde
+> det gamla OS:et – testenheten dumpar (12110 byte), alltså nyare firmware.
 
 **Kolla enhetens OS-version:** visas kort i displayen direkt efter påslag.
 Firmware kunde bara uppdateras genom att skicka in enheten till Behringer
@@ -77,14 +81,15 @@ Firmware kunde bara uppdateras genom att skicka in enheten till Behringer
 
 - 3× 5-pol DIN (IN / OUT / THRU) på baksidan. Optokopplad, potentialfri.
 - Standard MIDI-kabel: Pin 2 = skärm, Pin 4 + 5 = ledare, Pin 1 + 3 oanvända.
-- Max kabellängd 15 m (45 ft).
+- Max kabellängd ~15 m (eng. manual: "45 feet", tysk: "15 Meter").
 - **MIDI IN:** tar emot Program Change, Controller och (nyare OS) SysEx.
 - **MIDI THRU:** oförändrad genomsläppning – flera enheter kan kedjas.
 - **MIDI OUT (nyare OS):** skickar programdata + statusinfo till dator eller
   till andra Ultra-Curve (master/slave). På 1996-modellen: inaktiv.
 
-Retursväg fungerar på testenheten först när **båda** kablarna sitter i
-(IN och OUT) – se `readme.md`.
+Returväg fungerar på testenheten först när **båda** kablarna sitter i
+(AudioBox OUT→DSP8000 IN *och* DSP8000 OUT→AudioBox IN) – verifierat
+2026-09-02, se `readme.md`.
 
 ---
 
@@ -100,9 +105,9 @@ softkeys ändrar.
 | **CHANNEL** | mottagningskanal. "OMNI MODE" = ta emot på alla kanaler | OFF / OMNI (ALL) / 1–16 |
 | **SND MEMORY DUMP** | `+/–` utlöser dump av hela minnet ut på MIDI OUT | (tryck) |
 | **RCV MEMORY DUMP** | `+/–` sätter enheten i mottagningsläge för en extern dump | (tryck) |
-| **CNTL** | Controller-data sänds/tas emot. Talet = **första controller-numret** (offset). "De följande 64 numren är frekvenserna 20 Hz–20 kHz + master, först vänster sedan höger kanal." | RCV / SND, offset **0–64** |
+| **CNTL** | Controller-data sänds/tas emot. Talet = **första controller-numret** (offset). Manualen: de följande 64 numren = frekvenserna 20 Hz–20 kHz + master, först vänster kanal, sedan höger. | RCV / SND, offset **0–64** |
 | **PROG** | Program Change sänds/tas emot | RCV ON/OFF, SND ON/OFF |
-| **EXCL** | System Exclusive sänds/tas emot. Krävs för EQ-Design-mjukvaran ("alla parametrar och funktioner fjärrbedienbara") | RCV ON/OFF, SND ON/OFF |
+| **EXCL** | System Exclusive sänds/tas emot. Krävs för EQ-Design-mjukvaran (manualen: alla parametrar och funktioner blir då fjärrstyrbara) | RCV ON/OFF, SND ON/OFF |
 
 > `CNTL` är **inte** ON/OFF utan ett **tal** (offset). RCV och SND har
 > varsitt. Testenheten: `RCV = 0`, `SND = 1`. `dsp8000.CC_OFFSET` måste = `RCV`.
@@ -111,25 +116,31 @@ softkeys ändrar.
 MIDI ON · CHANNEL 1 · OMNI ON · CNTL RCV 0 / SND 1 · PROG RCV+SND ON ·
 EXCL RCV+SND ON.
 
-**För SysEx-styrning (ADRStudio / StudioWare):** slå på `EXCL SND` + `RCV`,
-och slå **av `CNTL SND` + `RCV`** så att inte controller-ekon nollställer
-inställningar av misstag.
+**För SysEx (memory dump på vår enhet, eller EQ-Design/StudioWare på en
+DSP8024):** slå på `EXCL SND` + `RCV`. Vid rena SysEx-verktyg rekommenderar
+ADRStudio att man slår **av `CNTL SND` + `RCV`** så att inte controller-ekon
+nollställer inställningar av misstag. (Vår `sysex`-test gjordes med
+`CNTL RCV = 0` utan problem – bara läsförfrågningar skickades.)
 
 ### GLOBAL SETUP (sida 1) – övrigt värt att känna till
 
 | Fält | Värden |
 |---|---|
-| INPUT | Analog / Digital (AES/EBU-option). I analogläge väljs samplingsfrekvens här: **44,1 / 48 kHz** (32 kHz endast via AES/EBU). Byte av frekvens mutar ~1 sek. |
+| INPUT | Analog / Digital (AES/EBU-option). Samplingsfrekvens i analogläge: **44,1 / 48 kHz** enligt DSP8024-manualen (32 kHz bara via AES/EBU). 1996-DSP8000 tillät även 32 kHz analogt. Byte mutar ~1 sek. |
 | VIEWING ANGLE | LCD-kontrast 0–31 (även SETUP + Cursor upp/ned) |
 | RTA LOCK | spärr mot att gå in i RTA-läge |
-| SECURITY | UNLOCK / LOCK med lösenord. LOCK: allt spärrat utom EQ-display och level meter – *"enda sättet att ändra är via MIDI"* |
+| SECURITY | UNLOCK / LOCK med lösenord. LOCK: allt spärrat utom EQ-display och level meter – enligt manualen är då MIDI enda sättet att ändra |
 | PROTECT MEM | skrivskydd för programminne, med EQ LO/HI och RTA LO/HI som gräns |
 
 Glömt lösenord → batteriet ut en stund → **alla program raderas**.
 
 ---
 
-## 4. MIDI Implementation Chart (Tab. 7.1, DSP8024 / DSP8000 nyare OS)
+## 4. MIDI Implementation Chart
+
+Ur **DSP8024-manualen, Tab. 7.1** (förkortad – Note/Velocity/Aftertouch-
+raderna är slagna ihop). Antas gälla även DSP8000 med nyare OS; ej separat
+verifierat för DSP8000.
 
 ```
 Function            Transmitted   Recognized   Remarks
@@ -137,14 +148,12 @@ Basic  Default          X          1-16        memorized
 Channel Changed         X          1-16
 Mode   Default          X          1,2,3,4
        Messages         X          X
-Note Number             X          X
-Velocity                X          X
-Aftertouch              X          X
+Note / Velocity / AT    X          X
 Pitch Bender            X          X
-Control Change          O          O           offset of the first controller adjustable (se Tab 7.2)
+Control Change          O          O           controller-offset justerbar (se Tab 7.2)
 Program Change          0-99       0-99        True # 1-100
 System Exclusive        O          O
-System Common / RT      X          X
+System Common / Real T. X          X
 Aux Messages            X          X
 
 O = YES   X = NO
@@ -153,8 +162,9 @@ Mode 2: OMNI ON, MONO    Mode 4: OMNI OFF, MONO
 ```
 
 **1996 DSP8000 V1.3-charten skiljer sig:** `System Exclusive` = `X / X`
-(inget stöd), och Control Change står som fast **64–94** (vä EQ) /
-**95** (vä master) / **96–126** (hö EQ) / **127** (hö master).
+(inget stöd), `Program Change` transmitted = `X` (`MIDI OUT` inaktiv), och
+Control Change står som **fast 64–127**: 64–94 vä EQ · 95 vä master ·
+96–126 hö EQ · 127 hö master.
 
 ---
 
@@ -163,10 +173,13 @@ Mode 2: OMNI ON, MONO    Mode 4: OMNI OFF, MONO
 ### Status bytes
 
 ```
-Program Change:  Cc xx      c = kanal,  xx = program 0..99
-Controller:      Bc nn vv   c = kanal,  nn = controllernr,  vv = värde
-                 Controller Offset justerbar 0–64  (adderas till nn)
+Program Change:  Cn pp      n = kanal (0–F),  pp = program 0..99
+Control Change:  Bn cc vv    n = kanal,  cc = controllernr,  vv = värde 0–127
+                 Controller-offset justerbar 0–64  (adderas till cc)
 ```
+
+*(Manualen skriver detta slarvigt som `Pcxx` / `Ccxx` – status-nibblarna
+är egentligen `0xC0|n` för Program Change och `0xB0|n` för Control Change.)*
 
 ### Data bytes (offset = 0)
 
@@ -179,17 +192,25 @@ Controller:      Bc nn vv   c = kanal,  nn = controllernr,  vv = värde
 
 - Med **offset N**: lägg till N på alla nummer. Gamla DSP8000 = fast offset 64.
 - **Värdeskala GEQ via CC:** 0–127, mitt = 64 = 0 dB. Projektet har
-  kalibrerat **`CC = 64 + dB × 4`** mot displayen (0,25 dB/steg nominellt,
-  enheten rundar till 0,5). ±16 dB ⇒ teoretiskt 0…128, klipps vid 127.
+  kalibrerat **`CC = 64 + dB × 4`** mot displayen (0,25 dB/CC nominellt,
+  men GEQ:n har 0,5 dB-upplösning så enheten rundar). ±16 dB ⇒ teoretiskt
+  0…128, klipps vid 127.
 - **Program Change:** 0–99 sänds/tas emot (displayen visar 1–100).
 - **31 ISO-frekvenser:** 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200,
   250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000,
   5000, 6300, 8000, 10000, 12500, 16000, 20000 Hz.
 
-### PEQ-regelområde (från 1996-manualens tyska text / midi_captures)
-GEQ: +16…−16 dB i 0,5 dB-steg. **PEQ: +16…−48 dB i 0,5 dB-steg.**
-PEQ går **inte** via CC – bara via SysEx (avsnitt 6) eller "ställ för
-hand → spara program → Program Change".
+> **Tre olika GEQ-värdeskalor förekommer** (håll isär):
+> CC-datavärde 0–127, mitt 64 (Tab 7.2 + vår kalibrering) ·
+> ADRStudio realtids-SysEx `10h` 0–64, mitt `20`h=32 (avsnitt 6, DSP8024) ·
+> den packade dumpen `(dB+16)×4` ≈ 0–127, mitt 64 (`midi_captures.txt`).
+
+### PEQ-regelområde
+
+GEQ: +16…−16 dB i 0,5 dB-steg (Tab 7.2 / spec).
+**PEQ: +16…−48 dB i 0,5 dB-steg** (DSP8024-manualen, bekräftat av ADRStudio
+`21h` i avsnitt 6). PEQ går **inte** via CC – bara via SysEx (avsnitt 6,
+DSP8024) eller "ställ för hand → spara program → Program Change".
 
 ---
 
@@ -199,14 +220,20 @@ Reverse-engineerat av **Adriano Ficarelli Jr, ADRStudio.com** (rev 14,
 2006) genom att sniffa trafiken mellan EQ-Design och enheten. Behringer
 publicerade aldrig detta.
 
-> **Testat mot vår DSP8000 2026-09-02 – funkar INTE som beskrivet.**
-> Modellbyte `0E` (DSP8024) ignoreras helt. Med `01` svarar enheten på
-> *varje* `70`-förfrågan (`70 01`, `70 10 1F`, `70 64` …) med samma sak:
-> hela den packade 12110-byte-dumpen (`F0 00 20 32 00 01 4F 0A …`),
-> ~5 s efter förfrågan. Ingen av de granulära läsningarna eller
-> realtidsskrivningarna nedan gav något gensvar. DSP8000:s OS har alltså
-> en mycket enklare SysEx-hanterare än DSP8024. Behåll listan som
-> DSP8024-referens.
+> **Testat mot vår DSP8000 2026-09-02 – protokollet nedan gäller DSP8024,
+> inte vår enhet.** Modellbyte `0E` ignoreras helt. Med `01` svarar
+> enheten på *varje* `70`-läsförfrågan (`70 01`, `70 10 1F`, `70 64` …)
+> med samma sak: hela den packade 12110-byte-dumpen
+> (`F0 00 20 32 00 01 4F 0A …`), ~5 s efter förfrågan – aldrig ett kort,
+> granulärt svar. Skrivkommandona (`10h`, `21h` …) är **oprövade** men lär
+> inte fungera när `0E` ignoreras och `01` bara dumpar. DSP8000:s OS har
+> alltså en mycket enklare SysEx-hanterare. **Allt nedan är
+> DSP8024-referens**, återgivet efter ADRStudio.
+
+**Om notationen nedan:** kommandobyte anges hex. Datavärden återges som
+ADRStudio skrev dem – där blandas decimalt och hex utan markering, och
+listan har kända skrivfel (t.ex. "`1Eh` = 10 kHz" fast `00`–`1E` är
+31 band = 20 Hz–20 kHz). Inget av detta är verifierat mot hårdvara här.
 
 ### Header
 
@@ -233,23 +260,24 @@ för att växla mellan L/R på EQ-displayen eller nollställa RTA HOLD.
 | `02` | Analyze IN/OUT (IN = bypass) | `00` = IN, `01` = OUT |
 | `08` | Växla Equalizer / RTA | `00` = EQ, `01` = RTA |
 
-### SEND – Equalizer
+`sb`-byten i PEQ-kommandona: hög nibble = kanal (`0` vä / `2` hö),
+låg nibble = band (`0`–`2`). Ex: `21` = höger kanal, band 1.
 
-| Kmd | Funktion | Data |
+| Kmd (hex) | Funktion | Data (dec om inget annat) |
 |---|---|---|
-| `10` | **GEQ frekvensnivå** `F0…0E 10 sr xx F7` | `sr` = `00`–`1E` vänster band, `20`–`3E` höger band (00 = 20 Hz, 01 = 25 Hz, …). `xx` = 0–64, **`20`h (32) = 0 dB** |
-| `11` | **Master volym** `…11 s0 xx F7` | `s` = 0 vä / 2 hö. `xx` = 0–64, `20`h = 0 dB (−16…+16 dB, 0,5 dB) |
-| `12` | Limiter threshold (båda kanaler) | `00` = OFF, `01`–`37` = −dB |
-| `14` | Limiter release | `00`–`18`, 0,5 s per steg |
-| `15` | Noise gate (båda kanaler) | `00` = OFF, `01`–`2F` (−96…−44 dB) |
-| `19` | Delay på/av | `00` / `01` |
-| `1A` | Delay tid/avstånd `…1A s0 xx yy zz F7` | `s` = kanal. 3-byte-räknare, `zz` minst signifikant |
-| `1E` | **PEQ-läge** `…1E sb xx F7` | `s` = 0 vä / 2 hö, `b` = band 0–2. `xx`: 0 OFF, 1 PAR, 2 AUT, 3 SGL |
-| `1F` | **PEQ-frekvens** `…1F sb yy xx F7` | `yy` = band: 00 (20–87 Hz), 01 (88–378 Hz), 02 (383 Hz–1.66 kHz), 03 (1.68–7.235 kHz), 04 (7.32–20 kHz). `xx` = 0–127 (icke-linjärt) |
-| `20` | **PEQ-oktav (bandbredd)** `…20 sb xx F7` | `xx` = 0–120 (1/60…120/60 oktav) |
-| `21` | **PEQ-gain** `…21 sb 00 xx F7` | `xx` = 0–127 (−48…+16 dB, 0,5 dB) |
-| `23` | Crossfade-tid | `00`–`0F` sek |
-| `24` | Shelving slope | `00`–`0A`, 3 dB/oktav per steg |
+| `10` | **GEQ frekvensnivå** `10 sr xx` | `sr` **hex**: `00`–`1E` vä band, `20`–`3E` hö band (`00`=20 Hz, `01`=25 Hz, …, 31 band). `xx` = 0–64, **32 = 0 dB** (ADRStudio skriver mitten som `20h`) |
+| `11` | **Master volym** `11 s0 xx` | `s` = 0 vä / 2 hö. `xx` = 0–64, 32 = 0 dB (−16…+16 dB, 0,5 dB) |
+| `12` | Limiter threshold (båda kanaler) | 0 = OFF, 1–37 |
+| `14` | Limiter release | 0–18, 0,5 s per steg |
+| `15` | Noise gate (båda kanaler) | 0 = OFF, 1–47 (≈ −96…−44 dB) |
+| `19` | Delay på/av | 0 / 1 |
+| `1A` | Delay tid/avstånd `1A s0 xx yy zz` | `s` = kanal. 3-byte-räknare, `zz` minst signifikant |
+| `1E` | **PEQ-läge** `1E sb xx` | `xx`: 0 OFF, 1 PAR, 2 AUT, 3 SGL |
+| `1F` | **PEQ-frekvens** `1F sb yy xx` | `yy` = intervall: 0 (20–87 Hz), 1 (88–379 Hz), 2 (383 Hz–1,66 kHz), 3 (1,68–7,24 kHz), 4 (7,32–20 kHz, här `xx` max `58h`). `xx` = 0–127 (icke-linjärt) |
+| `20` | **PEQ-oktav (bandbredd)** `20 sb xx` | `xx` = 0–120 (1/60…120/60 oktav) |
+| `21` | **PEQ-gain** `21 sb 00 xx` | `xx` = 0–127 (−48…+16 dB, 0,5 dB) |
+| `23` | Crossfade-tid | 0–15 sek |
+| `24` | Shelving slope | 0–10, 3 dB/oktav per steg |
 
 ### SEND – RTA
 
@@ -294,7 +322,7 @@ p q r s t u v x y z { / | } ~ (space)
 É . . ô ö ò û ù ÿ Ö Ü . . . . .
 ```
 
-### REQUEST / READ
+### REQUEST / READ (ADRStudio, DSP8024 – vår DSP8000 svarar bara med dumpen)
 
 | Sträng | Ger |
 |---|---|
@@ -328,31 +356,43 @@ F0 00 20 32 00 0E 11 00 xx 11 20 xx F7
 
 - Utlöses från MIDI SETUP-sidan med `+/–`. Skickar hela minnet på MIDI OUT,
   kan spelas in i en sekvenser och laddas tillbaka med `RCV MEMORY DUMP`.
-- **Testenhetens dump:** 12110 byte. Header 10 byte
-  `00 20 32 00 01 4F 12 00 20 00`, sedan 100 program × 121 byte,
-  **bit-packat / proprietärt**. `readme.md`/`midi_captures.txt` har knäckt
-  GEQ-bandformatet (8 byte/band, bitvikter `[64,32,16,8,4,2,1]` + separator,
-  värde = `(dB+16)×4`) men inte hela blocklayouten.
-- Den **läsbara** GEQ-statusframen (vid fader-rörelse):
-  `F0 00 20 32 00 01 33 09 <32 vä> <32 hö> F7`, position 0–30 = band,
-  31 = master, `64` (0x40) = 0 dB.
-- Ingen officiell dokumentation av dump-formatet existerar (Behringer
-  lämnar inte ut det). ADRStudio-listan gäller realtidskommandon, inte
-  den packade dumpen.
+- **Testenhetens dump:** 12110 byte (payload). Header 10 byte
+  `00 20 32 00 01 4F 12 00 20 00` (`4F` = dump), sedan 100 × 121 byte.
+  Om ett separat working-buffer-block ingår är oklart – 10 + 100×121 = 12110
+  går jämnt ut utan ett. **Bit-packat / proprietärt.**
+- **Samma dump via SysEx-förfrågan** (`F0 00 20 32 00 01 70 xx F7`, se
+  avsnitt 10) men med sub-kod `4F 0A` istället för `4F 12`. Skiljer sig
+  annars bara på ~84 byte i header + första programblocket; de 100 sparade
+  programmen är bit-identiska. Sparad: `dsp8000_sysex_ondemand.syx`.
+- **GEQ-bandformatet delvis knäckt** (`midi_captures.txt`, diff
+  `dsp8000_sysex_m16db.syx` vs `..._p16db.syx`): 8 byte/band, 7 st med
+  bitvikter `[64,32,16,8,4,2,1]` + 1 separator, bandvärde = summan (0–127),
+  skala `(dB+16)×4`. Hela blocklayouten (var master, PEQ, delay osv. ligger)
+  är **inte** kartlagd.
+- Den **läsbara** GEQ-statusframen (skickas vid fader-rörelse, inte på
+  begäran): `F0 00 20 32 00 01 33 09 <32 vä> <32 hö> F7`, position 0–30 =
+  band, 31 = master, `64` (0x40) = 0 dB.
+- Ingen officiell dokumentation av dump-formatet finns (Behringer lämnar
+  inte ut det). ADRStudio-listan (avsnitt 6) gäller DSP8024:s granulära
+  realtidskommandon, inte den packade dumpen.
 
 ---
 
 ## 8. PC-editor: EQ-Design / "UltraCurve Design"
 
-- **Gratis** Windows-program (32-bit, Win9x/XP), krävde IBM-PC ≥ 486DX2-66,
-  32 MB RAM och ett MIDI-interface. Fullt MIDI-I/O.
-- **OS-krav:** DSP8000 **OS ≥ V2.0**, DSP8024 **OS ≥ V1.1**.
+Uppgifterna nedan kommer från **sökträffar** (manualslib, freedownloadmanager,
+software.informer, forumtrådar) – **ej förstahandsverifierat**, mjukvaran är
+inte testad i det här projektet.
+
+- Gratis Windows-program (uppges 32-bit, Win9x, ~486DX2-66 / 32 MB, MIDI-interface).
+- **OS-krav (uppges):** DSP8000 OS ≥ V2.0, DSP8024 OS ≥ V1.1.
 - Kommunicerar via **SysEx** (kräver `EXCL` på).
-- **Inte längre nedladdningsbart från behringer.com.** Finns kvar på
-  tredjepartssidor (freedownloadmanager, software.informer m.fl.) och i
-  Audiofanzine/diyAudio-trådar – används på egen risk.
-- ADRStudio har även en **StudioWare-panel för Cakewalk/Sonar** som
-  alternativ (avsnitt 9).
+- **Inte längre nedladdningsbart från behringer.com.** Finns på
+  tredjepartssidor och i Audiofanzine/diyAudio-trådar – används på egen risk.
+- Givet testet i avsnitt 10 (DSP8000 svarar bara med hela dumpen) pratar
+  mjukvaran troligen just `4F`-dump fram och tillbaka med vår enhet – den
+  skulle alltså inte ge något som CC-vägen + REW inte redan ger.
+- ADRStudio har även en **StudioWare-panel för Cakewalk/Sonar** (avsnitt 9).
 
 ---
 
@@ -386,14 +426,15 @@ kablarna, MIDI ON, EXCL SND+RCV ON, enheten på EQ-huvudskärmen).
 | `F0 00 20 32 00 01 70 64 F7` (EQ-meter) | samma 12110-byte dump |
 | `F0 00 20 32 00 0E …` (modellbyte 0E / 7F 0E) | **inget svar** |
 
-- Dumpen är `F0 00 20 32 00 01 **4F 0A** …` – identisk med `SND MEMORY
-  DUMP` (`4F 12`) sånär som på **84 byte** i span offset 7–218 (header +
-  working buffer). De 100 sparade programmen (offset 219→) är **bit för
-  bit lika**. Sparad: `dsp8000_sysex_ondemand.syx`.
+- Dumpen (`F0 00 20 32 00 01 **4F 0A** …`) är identisk med `SND MEMORY
+  DUMP` (`4F 12`) sånär som på **84 byte**, alla i fil-offset 7–218
+  (sub-koden + de första ~200 databytena, troligen arbetsprogrammet).
+  Resten – dvs. i praktiken alla 100 sparade program – är **bit för bit
+  lika**. Sparad: `dsp8000_sysex_ondemand.syx`.
 - Alltså: **DSP8000:s enda SysEx-svar är hela minnesdumpen.** Ingen
-  granulär läsning, ingen systemversion-sträng, inga realtidsskrivningar
-  (ADRStudio:s `10h`/`21h` osv. – oprövat men chanslöst givet att `0E`
-  ignoreras och `01`+`70` bara dumpar).
+  granulär läsning, ingen systemversion-sträng. Realtidsskrivningarna
+  (ADRStudio:s `10h`/`21h` osv.) är **oprövade** men lär vara chanslösa när
+  `0E` ignoreras och `01`+`70` bara dumpar.
 
 ### Vad vi faktiskt vann
 
@@ -424,31 +465,50 @@ Kör `sysex --write-test` om du vill prova ADRStudio:s `10 sr xx`-skrivning
 
 ## 11. Källor
 
-- **DSP8000 User Manual Ver. 1.3 (juli 1996)** – archive.org, item
-  `behringer-ultra-curve-dsp-8000-user-manual-ver-1-3`
-  (OCR-text: `…_djvu.txt`). Även `behringer-vintage.com/Anleitungen/DSP8000_V1.3_1996_ENG.pdf`
-  och `usedstage.ru/wp-content/uploads/2019/08/DSP8000_man.pdf`.
-- **DSP8024 PRO Bedienungsanleitung, Version 1.2 (juni 2001, tyska)** –
-  `tonkreis.de` … `Behringer ULTRA CURVE - DSP 8000.pdf` (innehållet är
-  DSP8024, textbaserad PDF – bäst källa för MIDI SETUP-fälten och Tab 7.1/7.2).
-- **DSP8024 PRO User's Manual (engelska)** – archive.org
-  `manualzilla-id-7376194` (`7376194_djvu.txt`); även manualslib.com/manual/15059.
-- **ADRStudio.com – "SysEx Commands for Behringer Ultra Curve Pro DSP 8024"**
-  (Adriano Ficarelli Jr, rev 14, 2006): <https://adrstudio.com/8024.php>
-  (PDF: `adrstudio.com/pdf/DSP8024-SYSEX-v13.pdf`).
-- **ADRStudio.com – "DSP-8024 StudioWare panel for Cakewalk and Sonar"**:
-  <https://adrstudio.com/studioware.php>
-- **Sound on Sound – Behringer Ultra-curve review**:
-  <https://www.soundonsound.com/reviews/behringer-ultra-curve>
-- **EQ-Design / UltraCurve Design (OS-krav V2.0 / V1.1)** – manualslib s.33,
-  freedownloadmanager.org, software.informer.com, diyAudio-trådar
-  (`behringer-dsp8000-download-pc-software.399835`,
-  `req-behringer-ultracurve-dsp8024-midi-software.356917`).
-- **Övrigt community**: gearspace ("Problem with Behringer ULTRA-CURVE PRO
-  DSP8024", "behringer ultra curve dsp8000 vs"), audiosex.pro,
-  Audiofanzine (fransk + engelsk), hometheatershack, Keith Neufeld's
-  Electronics Blog ("Installing a Behringer DSP8024 Equalizer and Upgrading
-  Firmware", `neufeld.newton.ks.us/electronics/?p=575` – sparad Wayback-kopia
-  i `docs/keiths-blog-dsp8024-firmware-upgrade.html`: DSP8024-firmware
-  1.1→1.3 låg som EPROM-image (27C256) på behringer.com; Auto-Q-arbetsgång;
-  hiss + kraftig pop vid på/avslag – slå på EQ:n före slutsteget).
+### Manualer (primärkällor)
+
+- **DSP8000 User Manual V1.3 (juli 1996)** –
+  [archive.org: behringer-ultra-curve-dsp-8000-user-manual-ver-1-3](https://archive.org/details/behringer-ultra-curve-dsp-8000-user-manual-ver-1-3)
+  (OCR-text via `..._djvu.txt`). Speglar:
+  [behringer-vintage.com PDF](http://www.behringer-vintage.com/Anleitungen/DSP8000_V1.3_1996_ENG.pdf),
+  [usedstage.ru PDF](http://usedstage.ru/wp-content/uploads/2019/08/DSP8000_man.pdf).
+  → äldre MIDI-implementation (fast CC 64–127, ingen SysEx).
+- **DSP8024 PRO – tysk manual v1.2 (juni 2001)** –
+  [tonkreis.de PDF](http://www.tonkreis.de/D%20A%20T/Bedienungsanleitungen/Behringer%20ULTRA%20CURVE%20-%20DSP%208000.pdf)
+  (filnamnet säger 8000, innehållet är DSP8024; **textbaserad PDF** – bäst
+  källa för MIDI SETUP-fälten och Tab 7.1/7.2).
+- **DSP8024 PRO – engelsk manual** –
+  [archive.org: manualzilla-id-7376194](https://archive.org/details/manualzilla-id-7376194)
+  (OCR), även [manualslib.com/manual/15059](https://www.manualslib.com/manual/15059/Behringer-Ultra-Curve-Pro-Dsp8024.html).
+
+### SysEx-protokoll & mjukvara
+
+- **ADRStudio – "SysEx Commands for Behringer Ultra Curve Pro DSP 8024"**,
+  Adriano Ficarelli Jr, rev 14 (2006):
+  [adrstudio.com/8024.php](https://adrstudio.com/8024.php) ·
+  [PDF](https://adrstudio.com/pdf/DSP8024-SYSEX-v13.pdf).
+  Reverse-engineerat, gäller DSP8024 – **fungerar inte på vår DSP8000** (avsnitt 10).
+- **ADRStudio – "DSP-8024 StudioWare panel for Cakewalk and Sonar"**:
+  [adrstudio.com/studioware.php](https://adrstudio.com/studioware.php).
+- **EQ-Design / UltraCurve Design** (ej förstahandsverifierat) –
+  [freedownloadmanager.org](https://en.freedownloadmanager.org/Windows-PC/ULTRA-CURVE-Design-for-DSP8024-FREE.html),
+  [manualslib s.33](https://www.manualslib.com/manual/15059/Behringer-Ultra-Curve-Pro-Dsp8024.html?page=33).
+
+### Recension & community
+
+- **Sound on Sound** – [Behringer Ultra-curve review](https://www.soundonsound.com/reviews/behringer-ultra-curve)
+  (1996-modellen; "no data output over MIDI" gällde det gamla OS:et).
+- diyAudio: [DSP8000 PC software](https://www.diyaudio.com/community/threads/behringer-dsp8000-download-pc-software.399835/),
+  [DSP8024 midi software](https://www.diyaudio.com/community/threads/req-behringer-ultracurve-dsp8024-midi-software.356917/)
+  (blockerar direkthämtning – lästa via sökträffar).
+- [audiosex.pro-tråd](https://audiosex.pro/threads/behringer-ultracurve-dsp8024-midi-software.54478/),
+  gearspace ([DSP8024-problem](https://gearspace.com/board/live-sound/907547-problem-behringer-ultra-curve-pro-dsp8024.html),
+  [DSP8000-tråd](https://gearspace.com/threads/behringer-ultra-curve-dsp8000-vs.1296171/)),
+  Audiofanzine (fransk + engelsk), hometheatershack.
+- **Keith Neufeld's Electronics Blog** – "Installing a Behringer DSP8024
+  Equalizer and Upgrading Firmware"
+  ([neufeld.newton.ks.us/electronics/?p=575](http://www.neufeld.newton.ks.us/electronics/?p=575);
+  sparad Wayback-kopia i `docs/keiths-blog-dsp8024-firmware-upgrade.html`):
+  DSP8024-firmware 1.1→1.3 låg som EPROM-image (27C256) på behringer.com;
+  Auto-Q-arbetsgång; hiss + kraftig pop vid på/avslag – slå på EQ:n före
+  slutsteget. Gäller **DSP8024**, inte DSP8000.

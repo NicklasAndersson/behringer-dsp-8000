@@ -61,12 +61,13 @@ def open_input(hint=PORT_HINT):
 
 def monitor(seconds=30):
     """Lyssna på vad DSP8000 skickar och spara varje SysEx till fil. Rör en
-    fader eller tryck + på SND MEMORY DUMP. Kräver DSP8000 OUT -> interface IN
-    + CNTL/EXCL SND. Fungerar med båda kablarna i (verifierat 2026-09-02).
+    fader eller tryck + på SND MEMORY DUMP. Kräver DSP8000 OUT -> interface IN,
+    EXCL SND ON, och BÅDA MIDI-kablarna inkopplade (verifierat 2026-09-02).
 
-    OBS: SND MEMORY DUMP (~12110 byte) är packad/proprietär - se
-    midi_captures.txt och syx_tools.py. Fader-rörelse ger en läsbar 64-byte
-    GEQ-status (64 = 0 dB) som skrivs ut i dB här. Verifiera hellre
+    OBS: SND MEMORY DUMP ger 100 program x 121 byte BIT-PACKAT / proprietärt -
+    se midi_captures.txt och syx_tools.py. Fader-rörelse ger en läsbar 64-byte
+    GEQ-status (64 = 0 dB) som skrivs ut i dB här. En SysEx-forfragan
+    (`sysex`-kommandot) triggar samma packade dump. Verifiera hellre
     skrivningar med en REW-sweep."""
     n = 0
     with open_input() as inp:
@@ -89,7 +90,7 @@ def monitor(seconds=30):
             time.sleep(0.02)
     print(f"\n{n} meddelanden. " +
           ("OK - returvägen funkar." if n else
-           "INGET - kolla DSP8000 OUT -> interface IN (inte THRU), CNTL SND / EXCL SND."))
+           "INGET - kolla DSP8000 OUT -> interface IN (inte THRU), EXCL SND ON, bada kablarna i."))
 
 
 def geq_status_lines(data):

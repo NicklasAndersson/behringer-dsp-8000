@@ -84,12 +84,27 @@ FÖR ATT KNÄCKA HELA LAYOUTEN: sätt alla 31 band till max i GUI:t, "Skicka all
 verifiera på displayen att ALLA står +16, SPARA till ett programnummer, dumpa.
 Då har det programmets block alla 62 band + master på känt värde -> mappa allt.
 
+== 2026-09-02: ADRStudio-SysEx testad (rew_to_dsp8000.py sysex) ==
+Filnamn omdöpta sedan ovan: dsp8000_sysex_12110_0844.syx -> _m16db.syx,
+dsp8000_sysex_12110.syx -> _p16db.syx. Ny: _0db.syx, _ondemand.syx.
+- ADRStudio dokumenterar granulära SysEx-kommandon för DSP8024 (header
+  F0 00 20 32 00 0E ...). Testat mot vår DSP8000:
+  * modellbyte 0E -> INGET svar.
+  * F0 00 20 32 00 01 70 <xx> F7 (valfri xx) -> hela dumpen (12110 b,
+    sub-kod 4F 0A i st.f. 4F 12), ~5 s. Aldrig ADRStudios korta svar.
+- => DSP8000:s SysEx-hanterare kan bara dumpa allt. Ingen granulär läsning,
+  ingen realtids-PEQ. ADRStudio-listan = DSP8024-referens.
+- Vinst: dumpen kan hämtas UTAN fader-nudge (70 01). _ondemand vs SND MEMORY
+  DUMP: 84 byte skiljer, alla i offset 7..218; de 100 programmen identiska.
+- Full protokoll-genomgång: dsp8000_midi_webbresearch.md.
+
 == SLUTSATS ==
 - SKRIVA EQ: CC-vägen funkar, kalibrerad (CC = 64 + dB*4), offset 0,
   båda kanaler (Stereolink av). rew_to_dsp8000.py send. SysEx-skrivning = rabbit hole.
 - LÄSA EQ: dumpens GEQ-format är avkodningsbart (8 byte/band, se ovan) men
   hela blocklayouten behöver en till capture (all-max sparad till program).
 - VERIFIERA: kör en REW-sweep.
+- RETURVÄG: kräver BÅDA MIDI-kablarna. En SysEx-förfrågan triggar dumpen.
 
 == 2026-09-02 (granskning): de committade .syx-filerna ==
 Repot innehåller dsp8000_sysex_0db.syx, _m16db.syx, _p16db.syx, _ondemand.syx.

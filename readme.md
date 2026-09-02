@@ -230,7 +230,11 @@ justerar DSP8000:s band live och ser resultatet i realtid.
 
 ---
 
-## 6. MIDI-implementation (DSP8000, grundmodell)
+## 6. MIDI-implementation (DSP8000, ej PRO)
+
+Vår enhet kör ett **nyare OS** än 1996-manualen beskriver: justerbar
+controller-offset, SysEx-dump, MIDI OUT aktiv. Full jämförelse mellan
+OS-nivåer och DSP8024 finns i `dsp8000_midi_webbresearch.md`.
 
 ### Verifierat mot enheten 2026-09-02 — CC-styrning FUNGERAR
 
@@ -249,7 +253,7 @@ justerar DSP8000:s band live och ser resultatet i realtid.
 |---|---|
 | Program Change (0–99) | **fungerar** |
 | CC → grafisk EQ | **fungerar** — `CC 17 = 96` gav `L: +8 dB` på 1 kHz |
-| SysEx: enheten skickar full dump | **fungerar** — vid fader‑rörelse, `SND MEMORY DUMP` eller på förfrågan (se Returväg nedan) |
+| SysEx: enheten skickar full dump | **fungerar** — via fader‑rörelse, `SND MEMORY DUMP`, eller en SysEx‑förfrågan (se *Returväg* nedan). Kräver **båda** MIDI‑kablarna inkopplade |
 
 ### CC-mappning (bekräftad, offset 0)
 
@@ -263,8 +267,10 @@ justerar DSP8000:s band live och ser resultatet i realtid.
 `CC_OFFSET` i `dsp8000.py` måste = enhetens **CNTL RCV**‑tal. Testenheten: 0.
 Med **Stereolink** på räcker vänsterkanalen (`--channel left`).
 
-**dB → CC (verifierat):** `CC = 64 + dB × 4` — 64 = 0 dB, 96 = +8 dB,
-0,25 dB/steg, 0–127 = −16 … +15,75 dB. `dsp8000.db_to_cc` gör detta.
+**dB → CC (verifierat):** `CC = 64 + dB × 4` — 64 = 0 dB, 96 = +8 dB.
+Nominellt 0,25 dB/CC-steg, men GEQ:n har 0,5 dB-upplösning så enheten rundar.
+`CC 0–127` = −16 … +15,75 dB (+16 dB skulle vara CC 128 → klipps till 127).
+`dsp8000.db_to_cc` gör detta.
 
 ### Returväg / SysEx (DSP8000 → dator)
 
@@ -280,18 +286,21 @@ Fungerar (`rew_to_dsp8000.py monitor`) med **båda kablarna inkopplade**
   OS har alltså ingen granulär SysEx‑läsning eller realtidsskrivning – bara
   hela dumpen. Detaljer + ADRStudio:s DSP8024‑protokoll: `dsp8000_midi_webbresearch.md`.
   Praktisk vinst: dumpen kan hämtas **utan fader‑nudge**.
-- `SND MEMORY DUMP` = 10‑byte header (`00 20 32 00 01 4F 12 00 20 00`) +
-  working buffer + 100 program × 121 byte. **GEQ‑formatet delvis knäckt**
+- `SND MEMORY DUMP` = 10‑byte header (`00 20 32 00 01 4F 12 00 20 00`,
+  `4F` = dump) + ~12110 byte **bit‑packade / proprietära** block.
+  Blocklayouten är **inte bekräftad** — "100 × 121 byte"-hypotesen stämmer
+  inte med capture‑signaturerna (se `midi_captures.txt`), och om ett separat
+  working‑buffer‑block ingår är oklart. GEQ‑bandformatet är **delvis knäckt**
   (`python syx_tools.py diff dsp8000_sysex_0db.syx dsp8000_sysex_p16db.syx`):
   varje band = 8 byte, 7 st med bitvikter `64,32,16,8,4,2,1` + 1 separator;
-  bandvärde = summan, 0–127, skala `(dB+16)×4`. Bara 9–10 grupper (offset
-  61–135) skiljde mellan exporterna → **överföringsbuggen var stor** (GUI:t
-  skickar nu alla band med mellanrum). Full blocklayout kräver en capture till
-  (alla 31 band max, sparat till ett program, sedan dump).
+  bandvärde = summan, 0–127, skala `(dB+16)×4`. Bara ~9–10 grupper skiljde
+  mellan exporterna → **överföringsbuggen (tappade CC) var stor** vid den
+  capturen.
   **OBS om de sparade filerna:** `dsp8000_sysex_m16db.syx` och
   `dsp8000_sysex_p16db.syx` är byte‑identiska, och `dsp8000_sysex_0db.syx` har
   nollor i alla grupper — filnamnen stämmer alltså inte med innehållet (en av
-  ±16‑captures gick inte igenom). Gör om captures innan mer analys.
+  ±16‑captures gick inte igenom). Gör om captures (alla 31 band på känt
+  värde, sparat till ett program, sedan dump) innan mer analys.
 - Fader‑rörelse ger en **läsbar** 64‑byte GEQ‑status:
   `F0 00 20 32 00 01 33 09 <32 vä> <32 hö> F7`, position 0–30 = band,
   31 = master, `64` = 0 dB. Kräver en fader‑nudge för hand.
@@ -302,15 +311,25 @@ tror. Ingen anledning att avkoda den packade dumpen.
 
 ### Parametrisk EQ via MIDI
 Ligger i den packade dumpen (ej avkodad). Realtids‑CC för PEQ finns inte.
+DSP8024 har realtids‑**SysEx** för PEQ (ADRStudio) — men vår DSP8000 svarar
+inte på det protokollet (testat 2026‑09‑02, se `dsp8000_midi_webbresearch.md`).
 Reservväg: ställ in PEQ för hand → spara program → Program Change.
 
 ### Källor
-- Manual (DSP8024 PRO, samma MIDI/GEQ): archive.org “behringer-ultra-curve-dsp-8000-user-manual-ver-1-3”, behringer-vintage.com `DSP8000_V1.3_1996_ENG.pdf`
-- Sound on Sound-recension (påstod “no data output over MIDI” — motbevisat av vår capture)
-- **`dsp8000_midi_webbresearch.md`** — bred webbresearch: MIDI SETUP-fälten,
-  MIDI implementation chart (Tab 7.1/7.2), tre olika MIDI-OS-nivåer, och
-  ADRStudio:s reverse-engineerade SysEx-protokoll för DSP8024. Testat mot
-  vår enhet: DSP8024-protokollet fungerar **inte** här (se Returväg ovan).
+
+- **DSP8000 User Manual V1.3 (1996)** — [archive.org](https://archive.org/details/behringer-ultra-curve-dsp-8000-user-manual-ver-1-3)
+  (OCR-text via `..._djvu.txt`), spegel: [behringer-vintage.com](http://www.behringer-vintage.com/Anleitungen/DSP8000_V1.3_1996_ENG.pdf).
+  Beskriver den **äldre** MIDI-implementationen (fast CC 64–127, ingen SysEx).
+- **DSP8024 PRO-manual (v1.2, 2001)** — tysk textbaserad PDF på
+  [tonkreis.de](http://www.tonkreis.de/D%20A%20T/Bedienungsanleitungen/Behringer%20ULTRA%20CURVE%20-%20DSP%208000.pdf),
+  engelsk OCR på [archive.org](https://archive.org/details/manualzilla-id-7376194).
+  Matchar vår enhets MIDI-beteende (justerbar offset, SysEx, memory dump).
+- **Sound on Sound-recension** — [soundonsound.com](https://www.soundonsound.com/reviews/behringer-ultra-curve)
+  (påstod "no data output over MIDI" — gällde 1996-OS:et, vår enhet dumpar).
+- **ADRStudio: SysEx-kommandon för DSP8024** — [adrstudio.com/8024.php](https://adrstudio.com/8024.php).
+  Fungerar **inte** på vår DSP8000 (se *Returväg* ovan).
+- **`dsp8000_midi_webbresearch.md`** — full sammanställning: alla MIDI SETUP-fält,
+  implementation charts, de tre MIDI-OS-nivåerna, ADRStudio-protokollet, testresultat.
 - `docs/keiths-blog-dsp8024-firmware-upgrade.html` — sparad kopia (Wayback)
   av Keith Neufelds blogg om DSP8024: Auto‑Q‑arbetsgång, brus/pop‑problem,
   firmware 1.1→1.3 via ny 27C256‑EPROM (gäller **DSP8024**, inte DSP8000).
@@ -455,7 +474,7 @@ Läser `rew_eq_suggestion.json` och skickar de 31 bandvärdena som MIDI CC.
 |---|---|
 | `python rew_to_dsp8000.py ports` | listar MIDI-portar |
 | `python rew_to_dsp8000.py monitor` | lyssnar på vad DSP8000 skickar (retur­väg); fader-framen skrivs ut i dB |
-| `python rew_to_dsp8000.py sysex [--write-test]` | skickar dump-förfrågan via SysEx, sparar svaret som `.syx` |
+| `python rew_to_dsp8000.py sysex [--write-test]` | frågar enheten via SysEx, sparar svaret som `.syx` — bekräftar att bara hela dumpen kommer tillbaka (se avsnitt 6) |
 | `python rew_to_dsp8000.py calibrate [--band 1000]` | verifierar `db_to_cc` mot displayen |
 | `python rew_to_dsp8000.py send --dry-run` | visar alla CC utan att skicka |
 | `python rew_to_dsp8000.py send [--channel left\|right\|both] [--midi-channel N]` | skickar (frågar "ja" först) |
@@ -518,8 +537,10 @@ Reglagen sparas i `localStorage` — överlever refresh, skickas inte automatisk
 - Parametrisk EQ kan inte fjärrstyras (bara programbyten) — ställ för hand
 - MIDI CC→dB **verifierat**: `CC = 64 + dB×4`. `CC_OFFSET` måste matcha
   enhetens `CNTL RCV`‑tal
-- Returväg fungerar med **båda** MIDI‑kablarna i (verifierat 2026‑09‑02);
-  enheten ekar inte CC‑mottagning, bara fader‑rörelse/dump/förfrågan
+- Returväg kräver **båda MIDI‑kablarna** (AudioBox OUT→DSP8000 IN *och*
+  DSP8000 OUT→AudioBox IN). Verifierat 2026‑09‑02 — tidigare gissning om att
+  en kabel räckte var fel. Enheten ekar inte CC‑mottagning, bara
+  fader‑rörelse/dump/förfrågan
 - Hela EQ-kedjan (target settings + Match target + läsa filter) går via
   REW:s API, verifierad mot 0.9.0 — kräver **inte** REW Pro
 - Bara **sweepen** körs manuellt i GUI:t (medvetet — nivåer)
