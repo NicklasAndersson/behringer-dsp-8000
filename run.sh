@@ -21,7 +21,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh ports                  lista MIDI-portar
   ./run.sh monitor                lyssna på vad DSP8000 skickar (returväg)
   ./run.sh sysex                  fråga enheten via SysEx (dumpar minnet, se readme avsnitt 6)
-  ./run.sh readback               läs enhetens grafiska EQ ur dumpen, skriv i dB (ändrar inget)
+  ./run.sh readback               läs enhetens GEQ-band + 6 PEQ-filter ur dumpen (ändrar inget)
   ./run.sh grab FIL.syx           hämta en dump och spara (bygg bibliotek av kända tillstånd)
   ./run.sh probe [--band N --value CC]  dumpa, sätt ett band via CC, dumpa, diffa
   ./run.sh probe --manual         dumpa, pausa medan du ändrar PEQ/delay på enheten, dumpa, diffa

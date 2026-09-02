@@ -288,6 +288,26 @@ def test_decode_geq_known_dumps():
     assert mx["L"] == [16.0] * 31 and mx["R"] == [16.0] * 31, mx
 
 
+def test_decode_peq_roundtrips_a_record():
+    """Bygg en dump med PEQ L1 = 1 kHz, 1 okt, -6 dB och läs tillbaka."""
+    payload = bytearray(10 + 12100)
+    payload[5:8] = b"\x4f\x0a\x40"
+    bits = []
+    fr = round(640 * math.log10(1000 / 20))          # ~1088
+    bw = 60 - 1                                        # 1,000 okt -> raw 59
+    g = -6 * 16                                        # -96
+    for val, w in ((fr, 11), (bw, 10), (g & 0x7FF, 11)):
+        for i in range(w):
+            bits.append((val >> (w - 1 - i)) & 1)
+    for i, bit in enumerate(bits):                     # posten börjar på bit 87
+        pos = syx_tools.PEQ_BIT_OFFSET + i
+        payload[10 + pos // 7] |= bit << (6 - pos % 7)
+    fs = syx_tools.decode_peq(b"\xf0" + bytes(payload) + b"\xf7")
+    assert fs[0]["on"] and abs(fs[0]["freq_hz"] - 1000) < 15, fs[0]
+    assert abs(fs[0]["bw_oct"] - 1.0) < 0.02 and fs[0]["gain_db"] == -6.0, fs[0]
+    assert all(not f["on"] for f in fs[1:]), fs
+
+
 def test_decode_geq_roundtrips_a_single_band():
     """Bygg en dump med bara ett band satt, avkoda tillbaka samma dB."""
     payload = bytearray(10 + 12100)                     # header + nollor

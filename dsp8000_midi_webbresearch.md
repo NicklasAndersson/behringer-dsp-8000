@@ -367,13 +367,20 @@ F0 00 20 32 00 0E 11 00 xx 11 20 xx F7
   avsnitt 10) men med sub-kod `4F 0A` istället för `4F 12`. Skiljer sig
   annars bara på ~84 byte i header + första programblocket; de 100 sparade
   programmen är bit-identiska. Sparad: `dsp8000_sysex_ondemand.syx`.
-- **GEQ-bandformatet avkodat** (`rew_to_dsp8000.py probe`, verifierat mot
-  enheten 2026-09-02, se `syx_tools.py`): databyten packas upp **MSB-först**
-  till en bitström; från **bit-offset 373** ligger **64 tecknade
-  8-bitarsvärden** — 31 vä band, vä master, 31 hö band, hö master. Bandvärde
-  = **CC − 64** (kvarts-dB, `dB = värde/4`, −16,00…+15,75). Samma för `4F 0A`
-  och `4F 12`. Den tidigare "8 byte/band med bitvikter"-tolkningen var fel.
-  PEQ/delay/master-skala/de 100 programmen är **inte** kartlagda.
+- **GEQ- och PEQ-blocken avkodade** (`rew_to_dsp8000.py probe` / `probe --manual`,
+  verifierat mot enheten 2026-09-02, se `syx_tools.py`): databyten packas upp
+  **MSB-först** till en bitström.
+  * **GEQ**: från **bit-offset 373**, 64 tecknade 8-bitarsvärden — 31 vä band,
+    vä master, 31 hö band, hö master. Värde = **CC − 64** (kvarts-dB,
+    `dB = värde/4`, −16,00…+15,75). Den tidigare "8 byte/band med
+    bitvikter"-tolkningen var fel.
+  * **PEQ**: **6 poster à 32 bitar** från **bit-offset 87**, ordning
+    L1 R1 L2 R2 L3 R3. Per post: frekvens (11 bit, `f = 20·10^(raw/640)` Hz,
+    20 Hz = 0), bandbredd (10 bit, `(raw+1)/60` oktav), gain (11-bit
+    tvåkomplement, `dB = raw/16`). OFF = posten noll. Läget PAR/AUT/SGL
+    lagras **inte**.
+  Samma för `4F 0A` och `4F 12`. Delay/gate/limiter/master-skala/de 100
+  programmen är **inte** kartlagda.
 - Den **läsbara** GEQ-statusframen (skickas vid fader-rörelse, inte på
   begäran): `F0 00 20 32 00 01 33 09 <32 vä> <32 hö> F7`, position 0–30 =
   band, 31 = master, `64` (0x40) = 0 dB.
@@ -440,26 +447,25 @@ kablarna, MIDI ON, EXCL SND+RCV ON, enheten på EQ-huvudskärmen).
   granulär läsning, ingen systemversion-sträng.
 - **Realtidsskrivning `10h` testad 2026-09-02** (skicka `10 11 30`, dumpa,
   avkoda GEQ): dumpen ändras **inte** – varken modellbyte `01` eller `0E`.
-  ADRStudio:s `1F`/`20`/`21` (PEQ) lär vara lika döda. Att läsa/skriva PEQ
-  kräver alltså den packade dumpen; `probe --manual` kartlägger den.
+  ADRStudio:s `1F`/`20`/`21` (PEQ) lär vara lika döda. PEQ kan alltså **läsas**
+  ur den packade dumpen (nu avkodad, avsnitt 7) men inte skrivas via MIDI.
 
 ### Vad vi faktiskt vann
 
-1. **Dump på begäran utan fader-nudge + GEQ-återläsning.**
-   `F0 00 20 32 00 01 70 01 F7` → full dump. GEQ-blocket är nu **avkodat**
-   (bit-offset 373, 64 × 8-bit tecknat, `dB = v/4` – avsnitt 7), så
-   `rew_to_dsp8000.py send --verify` hämtar dumpen efter en CC-skrivning och
-   rapporterar band som inte landade – utan REW-sweep. `readback` läser ut
-   nuläget, `probe` gör kontrollerade captures. En REW-sweep behövs
-   fortfarande för det **akustiska** resultatet, inte för att se vad enheten
-   tog emot.
+1. **Dump på begäran utan fader-nudge + GEQ/PEQ-återläsning.**
+   `F0 00 20 32 00 01 70 01 F7` → full dump. GEQ- och PEQ-blocken är nu
+   **avkodade** (avsnitt 7), så `rew_to_dsp8000.py send --verify` hämtar
+   dumpen efter en CC-skrivning och rapporterar band som inte landade – utan
+   REW-sweep. `readback` läser ut nuläget (GEQ + de 6 PEQ-filtren), `probe`
+   gör kontrollerade captures. En REW-sweep behövs fortfarande för det
+   **akustiska** resultatet, inte för att se vad enheten tog emot.
 2. **Bekräftat att returvägen fungerar stabilt** med båda kablarna i.
 
 ### Vad som är dödt
 
-- Realtids-PEQ via MIDI: nej (varken CC eller SysEx på denna enhet – `10h`
-  testad och död). PEQ kan bara läsas ur den packade dumpen (ej kartlagd
-  än – `probe --manual`) eller ställas för hand + sparas som program.
+- Realtids-PEQ-**skrivning** via MIDI: nej (varken CC eller SysEx på denna
+  enhet – `10h` testad och död). PEQ kan **läsas** ur den packade dumpen
+  (avkodad, avsnitt 7) men måste ställas för hand + sparas som program.
 - Granulär GEQ-läsning: nej – men hela dumpen kan hämtas på begäran och
   GEQ-banden avkodas ur den (avsnitt 7), vilket räcker för `send --verify`.
 - EQ-Design-mjukvaran skulle möjligen prata med enheten (den använder

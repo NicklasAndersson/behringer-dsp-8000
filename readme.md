@@ -299,32 +299,40 @@ Fungerar (`rew_to_dsp8000.py monitor`) med **båda kablarna inkopplade**
   (−64…+63 ⇒ **−16,00…+15,75 dB**, `dB = värde / 4`). Samma layout för
   `4F 0A` och `4F 12`.
   ```sh
-  python syx_tools.py geq dsp8000_sysex_ondemand.syx      # banden i dB
-  python syx_tools.py diff före.syx efter.syx             # råa byte + GEQ-band som ändrats
-  python rew_to_dsp8000.py readback                       # hämta från enheten, skriv i dB
+  python syx_tools.py eq dsp8000_sysex_ondemand.syx       # GEQ-band + PEQ-filter
+  python syx_tools.py diff före.syx efter.syx             # råa byte + GEQ/PEQ som ändrats
+  python rew_to_dsp8000.py readback                       # hämta från enheten, skriv ut
   ```
   De committade `dsp8000_sysex_m16db.syx` / `_p16db.syx` är byte‑identiska
   men avkodas till en **ren +16 dB‑dump** (alla band `64/4`), och `_0db.syx`
   till ren 0 dB. Den gamla "8 byte/band med bitvikter"‑tolkningen och
   slutsatsen "stor överföringsbugg" var **avkodningsfel**, inte tappade CC.
-- Resten av blocket (PEQ, master‑skala, delay, gate, limiter, 100 program)
-  är **inte kartlagt**. Working buffer‑delen ligger i data‑offset ~0–52
-  (före GEQ, i baseline‑dumpen mest nollor ⇒ PEQ av) — kartläggs med
-  `probe --manual`: dumpa, ändra EN PEQ‑parameter på enheten, dumpa, diff.
-  Master‑värdet läses rått (verkar 0‑centrerat men skalan är inte verifierad).
+- **PEQ‑blocket är avkodat** (verifierat mot enheten 2026‑09‑02 med
+  `probe --manual`): **6 poster à 32 bitar** i samma MSB‑packade bitström,
+  från **bit‑offset 87**, ordning **L1 R1 L2 R2 L3 R3**. Per post:
+  frekvens (11 bit, `f = 20·10^(raw/640)` Hz, 20 Hz = 0),
+  bandbredd (10 bit, `(raw+1)/60` oktav),
+  gain (11‑bit tvåkomplement, `dB = raw/16`, dvs 1/16 dB i dumpen).
+  **OFF = posten helt noll.** Läget **PAR/AUT/SGL lagras inte** i dumpen (bara
+  filtret). `syx_tools.py eq` och `readback` visar de 6 filtren.
+- Resten (master‑skala, delay, gate, limiter, 100 program) är **inte
+  kartlagt**. Working buffer ligger i data‑offset ~0–27 (PEQ + limiter/gate).
+  Master‑värdet läses rått (verkar 0‑centrerat, skalan ej verifierad).
+  `probe --manual` kartlägger fler delar: dumpa, ändra EN sak på enheten, dumpa, diff.
 - Fader‑rörelse ger dessutom en **direkt läsbar** 64‑byte GEQ‑status:
   `F0 00 20 32 00 01 33 09 <32 vä> <32 hö> F7`, position 0–30 = band,
   31 = master, `64` = 0 dB. Kräver en fader‑nudge för hand.
 
-**Slutsats:** skriv EQ via CC (funkar, kalibrerat). `send --verify` hämtar
+**Slutsats:** skriv GEQ via CC (funkar, kalibrerat). `send --verify` hämtar
 dumpen efteråt och kollar att varje band landade (fångar tappade CC utan
 sweep). Verifiera det **akustiska** resultatet med en **REW‑sweep** — den
-visar vad rummet gör, inte bara vad enheten tror. PEQ går fortfarande inte
-att läsa/skriva via MIDI.
+visar vad rummet gör, inte bara vad enheten tror. PEQ går att **läsa** ur
+dumpen (`readback`) men inte skriva via MIDI.
 
 ### Parametrisk EQ via MIDI
-Ligger i den packade dumpen (den delen är **inte** avkodad — bara GEQ‑blocket
-är det, avsnitt 6). Realtids‑CC för PEQ finns inte.
+**Läsning:** de 6 filtren (frekvens/bandbredd/gain) avkodas ur den packade
+dumpen — se avsnitt 6 och `syx_tools.py eq` / `rew_to_dsp8000.py readback`.
+**Skrivning:** går inte. Realtids‑CC för PEQ finns inte.
 DSP8024 har realtids‑**SysEx** för PEQ (ADRStudio) — men vår DSP8000 svarar
 inte på det protokollet (testat 2026‑09‑02, se `dsp8000_midi_webbresearch.md`).
 Reservväg: ställ in PEQ för hand → spara program → Program Change.
@@ -359,7 +367,7 @@ Reservväg: ställ in PEQ för hand → spara program → Program Change.
 | `show_config.py` | JSON → `dsp8000_config.html`, visar vad som ska ställas in | klar |
 | `rew_to_dsp8000.py` | skickar de 31 banden som MIDI CC + `readback`/`probe`/`send --verify` | CC-vägen + GEQ-återläsning verifierad |
 | `dsp8000_gui.html` | manuell EQ-kontroll i webbläsaren (Web MIDI), utan REW | klar |
-| `syx_tools.py` | `hex`/`geq`/`diff` för `.syx`-dumpar — GEQ-blocket avkodat (stdlib) | klar |
+| `syx_tools.py` | `hex`/`eq`/`diff` för `.syx`-dumpar — GEQ- + PEQ-blocken avkodade (stdlib) | klar |
 | `test_rew_script.py` | självtester utan REW/enhet (`./run.sh test`) | klar |
 
 ### Steg 1: `rew_script.py`
@@ -489,7 +497,7 @@ Läser `rew_eq_suggestion.json` och skickar de 31 bandvärdena som MIDI CC.
 | `python rew_to_dsp8000.py ports` | listar MIDI-portar |
 | `python rew_to_dsp8000.py monitor` | lyssnar på vad DSP8000 skickar (retur­väg); fader-framen skrivs ut i dB |
 | `python rew_to_dsp8000.py sysex [--write-test]` | frågar enheten via SysEx, sparar svaret som `.syx` — bekräftar att bara hela dumpen kommer tillbaka (se avsnitt 6) |
-| `python rew_to_dsp8000.py readback` | hämtar dumpen på begäran och skriver ut de 31+31 grafiska banden i dB (ändrar inget) |
+| `python rew_to_dsp8000.py readback` | hämtar dumpen på begäran och skriver ut de 31+31 grafiska banden + de 6 PEQ-filtren (ändrar inget) |
 | `python rew_to_dsp8000.py grab FIL.syx` | hämtar en dump och sparar (ändrar inget) — bygg upp ett bibliotek av kända tillstånd att diffa |
 | `python rew_to_dsp8000.py probe [--band 1000] [--value 127] [--channel left]` | kontrollerad capture: dumpa, sätt ett band via CC, dumpa igen, visa vilka byte + band som ändrades. Återställer bandet till 0 dB (`--no-restore` låter bli) |
 | `python rew_to_dsp8000.py probe --manual` | som `probe` men utan CC: pausar medan du ändrar EN sak på enheten (PEQ, delay, gate …), sedan diff. Så kartläggs delarna som inte går via MIDI |
@@ -551,11 +559,12 @@ Reglagen sparas i `localStorage` — överlever refresh, skickas inte automatisk
 
 ## 8. Kända begränsningar att komma ihåg
 
-- DSP8000:s minnesdump är bit‑packad. **GEQ‑blocket är avkodat** (bit‑offset
-  373, 64 × 8‑bit tecknat, `dB = värde/4` — avsnitt 6), så `send --verify` /
-  `readback` fångar tappade CC. Resten (PEQ, delay, program) är inte
-  kartlagt. Det **akustiska** resultatet verifieras med en REW‑sweep
-- Parametrisk EQ kan inte fjärrstyras (bara programbyten) — ställ för hand
+- DSP8000:s minnesdump är bit‑packad. **GEQ‑ och PEQ‑blocken är avkodade**
+  (avsnitt 6), så `send --verify` / `readback` fångar tappade CC och visar
+  PEQ‑filtren. Delay/gate/limiter/master‑skala/de 100 programmen är **inte**
+  kartlagda. Det **akustiska** resultatet verifieras med en REW‑sweep
+- Parametrisk EQ kan **läsas** ur dumpen men inte skrivas via MIDI — ställ
+  för hand, spara som program, Program Change
 - MIDI CC→dB **verifierat**: `CC = 64 + dB×4`. `CC_OFFSET` måste matcha
   enhetens `CNTL RCV`‑tal
 - Returväg kräver **båda MIDI‑kablarna** (AudioBox OUT→DSP8000 IN *och*
@@ -625,10 +634,13 @@ Nytt i denna version:
 - `rew_script.py`: `--show-target`/`--target KEY=VÄRDE`/`--house-curve`/
   `--clear-house-curve`/`--house-curve-log-interp` (avsnitt 7) — sätter
   målkurvans form via API i stället för REW:s GUI.
-- **GEQ‑dumpen avkodad** (avsnitt 6): `syx_tools.py geq`/`diff` läser de
-  31+31 banden i dB, `rew_to_dsp8000.py readback` hämtar dem från enheten,
-  `probe` gör kontrollerade captures, `send --verify` kollar att banden
-  landade. Bitström MSB‑packad, offset 373, 64 × 8‑bit tecknat, `dB = v/4`.
-- `rew_to_dsp8000.py grab FIL.syx` (spara en dump) och `probe --manual`
-  (kartlägg PEQ/delay m.m. — pausa medan du ändrar på enheten). ADRStudios
-  realtidsskrivning `10h` testad och **död** på DSP8000.
+- **GEQ‑ + PEQ‑dumpen avkodad** (avsnitt 6): `syx_tools.py eq`/`diff` och
+  `rew_to_dsp8000.py readback` läser de 31+31 grafiska banden och de 6
+  PEQ‑filtren ur dumpen. GEQ: MSB‑packad bitström, offset 373, 64 × 8‑bit
+  tecknat, `dB = v/4`. PEQ: 6 × 32‑bitarsposter från offset 87 (L1 R1 L2 R2
+  L3 R3), freq `20·10^(raw/640)` Hz, bw `(raw+1)/60` okt, gain 11‑bit
+  2‑komp `dB = raw/16`; läget PAR/AUT/SGL lagras inte.
+- `rew_to_dsp8000.py grab FIL.syx` (spara en dump), `probe --manual`
+  (kartlägg delay/gate m.m. — pausa medan du ändrar på enheten),
+  `send --verify` (läs tillbaka efter skrivning). ADRStudios realtidsskrivning
+  `10h` testad och **död** på DSP8000.

@@ -11,7 +11,16 @@ Med rew_to_dsp8000.py probe (dumpa, sätt ETT band via CC, dumpa, diffa):
   * _m16db/_p16db (byte-identiska) avkodas till REN +16 dB, _0db till ren 0 dB.
     "Bara 9 grupper skiljde -> stor överföringsbugg" nedan var ett
     AVKODNINGSFEL, inte tappade CC. En capture missades bara (fel filnamn).
-  * Verktyg: python syx_tools.py geq|diff, rew_to_dsp8000.py readback|probe.
+  * Verktyg: python syx_tools.py eq|diff, rew_to_dsp8000.py readback|probe.
+
+== 2026-09-02: PEQ-BLOCKET AVKODAT (probe --manual + all-6-band-capture) ==
+6 poster à 32 bitar i samma MSB-packade bitström, från bit-offset 87,
+ordning L1 R1 L2 R2 L3 R3. Per post:
+  freq   = post-bit 0..10  (11-bit, f = 20*10^(raw/640) Hz, 20 Hz = raw 0, 20 kHz = 1920)
+  bw     = post-bit 11..20 (10-bit, oktav = (raw+1)/60)
+  gain   = post-bit 21..31 (11-bit tvakomplement, dB = raw/16, dvs 1/16 dB)
+OFF = posten helt noll. Laget PAR/AUT/SGL lagras INTE (SGL == PAR i dumpen).
+Verifierat: 6 band satta till -6/+1/-2/+16/+12/+6 dB + foto -> exakt match.
 --- allt nedan bevarat som historik; "8 byte/band"-tolkningen är alltså fel ---
 
 Setup: AudioBox USB, kanal 1. DSP8000 CNTL RCV/SND, PROG RCV, EXCL på.

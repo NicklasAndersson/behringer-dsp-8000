@@ -144,11 +144,12 @@ def grab_dump(out, inp, req=(0x70, 0x01)):
 
 
 GEQ_DATA_SPAN = (52, 128)   # data-offset-spann för GEQ-blocket (bit 373 .. 373+64*8, /7)
+PEQ_DATA_SPAN = (10, 25)    # data-offset-spann för de 6 PEQ-posterna (bit 87 .. 87+6*32, /7)
 
 
 def _report_dump_diff(before, after):
-    """Skriv ut vilka byte + vilka GEQ-band som skiljer mellan två dumpar.
-    Byte utanför GEQ_DATA_SPAN = kandidat för PEQ/delay/övrigt."""
+    """Skriv ut vilka byte + vilka GEQ/PEQ-fält som skiljer mellan två dumpar.
+    Byte utanför båda spannen = kandidat för delay/gate/limiter/övrigt."""
     n = min(len(before), len(after))
     diff = [i for i in range(n) if before[i] != after[i]]
     if len(before) != len(after):
@@ -157,18 +158,23 @@ def _report_dump_diff(before, after):
         print("\nIngen byte ändrades.")
         return
     hdr = 10  # 10-byte dump-header före databyten
-    lo, hi = GEQ_DATA_SPAN
+    spans = (("GEQ", GEQ_DATA_SPAN), ("PEQ", PEQ_DATA_SPAN))
     print(f"\n{len(diff)} byte ändrades:")
     for i in diff:
         d = i - hdr
-        tag = "" if lo <= d < hi else "   <- utanför GEQ-blocket"
-        print(f"  data[{d:5d}]  {before[i]:3d} -> {after[i]:3d}{tag}")
+        where = next((name for name, (lo, hi) in spans if lo <= d < hi), "utanför GEQ/PEQ")
+        print(f"  data[{d:5d}]  {before[i]:3d} -> {after[i]:3d}   ({where})")
     ga = syx_tools.decode_geq(b"\xf0" + before + b"\xf7")
     gb = syx_tools.decode_geq(b"\xf0" + after + b"\xf7")
     for name in ("L", "R"):
         for j, (x, y) in enumerate(zip(ga[name], gb[name])):
             if x != y:
                 print(f"  GEQ {name} {dsp8000.ISO_BANDS[j]:g} Hz: {x:+.2f} -> {y:+.2f} dB")
+    pa = syx_tools.decode_peq(b"\xf0" + before + b"\xf7")
+    pb = syx_tools.decode_peq(b"\xf0" + after + b"\xf7")
+    for lbl, x, y in zip(syx_tools.PEQ_LABELS, pa, pb):
+        if x != y:
+            print(f"  PEQ {lbl}: {syx_tools.peq_str(x)}  ->  {syx_tools.peq_str(y)}")
 
 
 def grab(path):
@@ -235,16 +241,19 @@ def _geq_from_dump(payload):
 
 def readback():
     """Hämta dumpen på begäran (ingen fader-nudge) och skriv ut de 31+31
-    grafiska banden i dB. Ändrar inget. Kräver båda MIDI-kablarna."""
+    grafiska banden + de 6 PEQ-filtren. Ändrar inget. Kräver båda MIDI-kablarna."""
     with open_output() as out, open_input() as inp:
         d = grab_dump(out, inp)
     if d is None:
         raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
                          "enheten på EQ-huvudskärmen.")
-    g = _geq_from_dump(d)
+    full = b"\xf0" + d + b"\xf7"
+    g = syx_tools.decode_geq(full)
     for name in ("L", "R"):
         cells = "  ".join(f"{f:g}:{db:+.2f}" for f, db in zip(dsp8000.ISO_BANDS, g[name]))
-        print(f"{name} (master {g[name+'_master']:+d}): {cells}")
+        print(f"GEQ {name} (master {g[name+'_master']:+d}): {cells}")
+    for lbl, pf in zip(syx_tools.PEQ_LABELS, syx_tools.decode_peq(full)):
+        print(f"PEQ {lbl}: {syx_tools.peq_str(pf)}")
     return g
 
 
