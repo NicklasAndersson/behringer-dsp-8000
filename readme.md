@@ -407,9 +407,14 @@ Giltiga EQ-kommandon (`/eq/command`): `Calculate target level`,
 `rew_script.py` behåller själv de 3 största och skriver tillbaka dem (steg 1,
 punkt 3) så resten av kedjan stämmer.
 
-**Sweep-triggning via API** (`POST /measure/command`) är möjlig men
-oprövad här — den skickar brus/sweep genom högtalarna och kräver att
-nivåer är inställda. Kör sweepen i GUI:t.
+**Sweep-triggning via API kräver REW Pro.** `POST /measure/command` finns
+och skulle utlösa sweepen (skickar brus genom högtalarna, kräver att nivåer
+redan är inställda) — men REW:s egen dokumentation säger uttryckligen att
+"to control REW via the API to make automated sweep measurements requires a
+Pro upgrade license". Allt annat `rew_script.py` gör (läsa mätningar, sätta
+equaliser/target settings, köra `Calculate target level`/`Match target`,
+läsa/skriva filter) är **inte** licensbelagt — bara själva sweep-triggningen.
+Kör sweepen i GUI:t (gratisversionen räcker för hela resten av kedjan).
 
 ### Steg 2: `rew_to_dsp8000.py` *(CC-vägen verifierad mot enheten 2026-09-02)*
 Läser `rew_eq_suggestion.json` och skickar de 31 bandvärdena som MIDI CC.
