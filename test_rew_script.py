@@ -326,6 +326,60 @@ def test_decode_geq_roundtrips_a_single_band():
     assert g["L"][5] == -8.0 and g["L"][4] == 0.0 and g["L"][6] == 0.0, g["L"][:8]
 
 
+def test_push_sends_dump_and_saves_before_after():
+    """push med fejkad MIDI: hela filen (utan F0/F7) ska gå ut som EN sysex,
+    före-dumpen sparas som återställningspunkt, efter-dumpen diffas.
+    --send-only: ingen dump hämtas, inga filer skrivs."""
+    import builtins
+    import contextlib
+    import io
+    import types
+    here = Path(__file__).parent
+    dump_path = here / "dumps" / "dsp8000_sysex_p16db.syx"
+    dump = dump_path.read_bytes()
+    zero = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()[1:-1]
+    sent = []
+
+    class FakePort:
+        def send(self, msg): sent.append(msg)
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    saved = (m.mido, m.open_output, m.open_input, m.grab_dump, builtins.input)
+    m.mido = types.SimpleNamespace(
+        Message=lambda type, data: types.SimpleNamespace(type=type, data=data))
+    m.open_output = m.open_input = FakePort
+    try:
+        grabs = iter([zero, dump[1:-1]])
+        m.grab_dump = lambda out, inp: next(grabs)
+        answers = iter(["ja", ""])
+        builtins.input = lambda prompt="": next(answers)
+        log = io.StringIO()
+        with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
+             contextlib.redirect_stdout(log):
+            m.push(str(dump_path))
+            before = list(Path(d).glob("probe_push_before_*.syx"))
+            after = list(Path(d).glob("probe_push_after_*.syx"))
+            assert len(before) == 1 and before[0].read_bytes() == b"\xf0" + zero + b"\xf7"
+            assert len(after) == 1 and after[0].read_bytes() == dump
+        assert "GEQ L 20 Hz: +0.00 -> +16.00 dB" in log.getvalue(), log.getvalue()[-600:]
+        assert len(sent) == 1 and sent[0].type == "sysex", sent
+        assert bytes(sent[0].data) == dump[1:-1] and len(sent[0].data) == 12110
+
+        # --send-only: ingen grab, inga filer
+        sent.clear()
+        m.grab_dump = lambda *a: (_ for _ in ()).throw(AssertionError("skulle inte dumpa"))
+        answers = iter(["ja", ""])
+        with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
+             contextlib.redirect_stdout(io.StringIO()):
+            m.push(str(dump_path), send_only=True)
+            assert not list(Path(d).glob("*.syx"))
+        assert len(sent) == 1 and bytes(sent[0].data) == dump[1:-1]
+    finally:
+        m.mido, m.open_output, m.open_input, m.grab_dump, builtins.input = saved
+
+
 def test_run_gui_allowlist_and_streams_help():
     """Starta panelen på en ledig port, avvisa okänt kommando, kör `help`,
     se att utskriften strömmas och exit-koden landar."""

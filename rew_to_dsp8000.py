@@ -21,7 +21,7 @@ Användning:
     python rew_to_dsp8000.py readback            # GEQ + PEQ ur enhetens dump (ändrar inget)
     python rew_to_dsp8000.py grab FIL.syx        # spara en dump
     python rew_to_dsp8000.py probe [--manual]    # dumpa, ändra en sak, dumpa, diffa
-    python rew_to_dsp8000.py push FIL.syx        # skicka en dump till enheten (RCV-test)
+    python rew_to_dsp8000.py push [--send-only] FIL.syx   # skicka en dump till enheten (RCV-test)
     python rew_to_dsp8000.py calibrate           # interaktiv kalibrering
     python rew_to_dsp8000.py send --dry-run      # visa vad som skulle skickas
     python rew_to_dsp8000.py send                # skicka på riktigt (frågar först)
@@ -240,42 +240,62 @@ def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
     _report_dump_diff(before, after)
 
 
-def push(path):
+def push(path, send_only=False):
     """Skicka en sparad minnesdump (F0 … 4F … F7) tillbaka till enheten - testet
-    av RCV MEMORY DUMP (docs/midi.md avsnitt 4). Dumpar före och efter och
-    diffar, så du ser om enheten tog emot något. Före-dumpen sparas alltid som
-    återställningspunkt. KAN SKRIVA ÖVER enhetens minne (arbetsbuffert + 100
-    program) - använd bara dumpar från samma enhet."""
+    av RCV MEMORY DUMP (protokoll i docs/midi.md avsnitt 4). Dumpar före och
+    efter och diffar, så du ser om enheten tog emot något. Före-dumpen sparas
+    alltid som återställningspunkt. KAN SKRIVA ÖVER enhetens minne
+    (arbetsbuffert + 100 program) - använd bara dumpar från samma enhet.
+
+    send_only: bara skicka, ingen före/efter-dump. För loopback-testet av
+    interfacet (`monitor` i ett annat fönster, interface OUT -> IN) eller om
+    enheten inte svarar på förfrågningar medan den väntar på en dump."""
     b = syx_tools.load(path)
     if not syx_tools.is_memory_dump(b):
         raise SystemExit(f"{path}: inte en minnesdump (F0 00 20 32 00 01 4F …).")
-    print(f"{path}: {len(b)} byte, sub-kod {b[6]:02x} {b[7]:02x}. "
-          "Det här kan SKRIVA ÖVER enhetens minne.")
+    fmt = ("knapp-format (SND MEMORY DUMP)" if b[6] == 0x12
+           else "förfrågnings-format (70-svar)")
+    print(f"{path}: {len(b)} byte, header {b[:11].hex(' ')} = {fmt}.")
+    print("Det här kan SKRIVA ÖVER enhetens minne (arbetsbuffert + 100 program).")
     if input("Skicka till enheten? (ja/nej): ").strip().lower() != "ja":
         raise SystemExit("Avbrutet.")
     ts = time.strftime("%H%M%S")
     before_f = Path(f"probe_push_before_{ts}.syx")
-    with open_output() as out, open_input() as inp:
-        print("Dump 1/2 (före)...")
-        before = grab_dump(out, inp)
-        if before is None:
-            raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
-                             "enheten på EQ-huvudskärmen.")
-        before_f.write_bytes(b"\xf0" + before + b"\xf7")
-        print(f"  återställningspunkt: {before_f}  (push den om något gick fel)")
-        input("  Testa knappvägen? Tryck + på RCV MEMORY DUMP på enheten nu, "
-              "annars inte. Enter skickar: ")
-        out.send(mido.Message("sysex", data=list(b[1:-1])))
-        time.sleep(6)   # 12 kB @ 31250 baud ≈ 4 s + marginal
-        print("Dump 2/2 (efter)...")
-        after = grab_dump(out, inp)
+    before = after = None
+    with open_output() as out:
+        inp = None if send_only else open_input()
+        try:
+            if inp:
+                print("Dump 1/2 (före)...")
+                before = grab_dump(out, inp)
+                if before is None:
+                    raise SystemExit("Inget svar. Kolla EXCL SND/RCV ON, båda kablarna i, "
+                                     "enheten på EQ-huvudskärmen. (--send-only hoppar "
+                                     "över dumparna.)")
+                before_f.write_bytes(b"\xf0" + before + b"\xf7")
+                print(f"  återställningspunkt: {before_f}  (push den om något gick fel)")
+            input("  Testa knappvägen? Tryck + på RCV MEMORY DUMP på enheten nu, "
+                  "annars inte. Enter skickar: ")
+            out.send(mido.Message("sysex", data=list(b[1:-1])))
+            print(f"  skickade {len(b)} byte, väntar 6 s (12 kB @ 31250 baud ≈ 4 s)...")
+            time.sleep(6)
+            if not inp:
+                print("Klart (--send-only, ingen återläsning). Kolla displayen, eller "
+                      "monitor-fönstret vid loopback: det ska visa en SysEx på 12110 byte.")
+                return
+            print("Dump 2/2 (efter)...")
+            after = grab_dump(out, inp)
+        finally:
+            if inp:
+                inp.close()
     if after is None:
         raise SystemExit("Andra dumpen kom inte - enheten står kanske kvar i "
-                         "mottagningsläge eller bytte skärm. Kolla displayen.")
+                         "mottagningsläge eller bytte skärm. Kolla displayen, kör "
+                         "readback separat. Före-dumpen är sparad.")
     Path(f"probe_push_after_{ts}.syx").write_bytes(b"\xf0" + after + b"\xf7")
     _report_dump_diff(before, after)
-    print("\nKolla också displayen: ändrades GEQ/PEQ där? (docs/midi.md avsnitt 4, "
-          "frågorna 1-6)")
+    print("\nKolla också displayen: ändrades GEQ/PEQ där? Anteckna utfallet enligt "
+          "docs/midi.md avsnitt 4 (testprotokollet) och 7 (testloggen).")
 
 
 def _geq_from_dump(payload):
@@ -460,7 +480,10 @@ def main():
     sub.add_parser("sysex").add_argument("--write-test", action="store_true")
     sub.add_parser("readback")
     sub.add_parser("grab").add_argument("path", help="filnamn att spara dumpen som")
-    sub.add_parser("push").add_argument("path", help="minnesdump (.syx) att skicka till enheten")
+    pp = sub.add_parser("push")
+    pp.add_argument("path", help="minnesdump (.syx) att skicka till enheten")
+    pp.add_argument("--send-only", action="store_true",
+                    help="bara skicka, ingen före/efter-dump (loopback-test av interfacet)")
     pb = sub.add_parser("probe")
     pb.add_argument("--band", type=float, default=1000)
     pb.add_argument("--value", type=int, default=127, metavar="CC-0-127")
@@ -501,7 +524,7 @@ def main():
     elif args.cmd == "grab":
         grab(args.path)
     elif args.cmd == "push":
-        push(args.path)
+        push(args.path, args.send_only)
     elif args.cmd == "probe":
         probe_band(args.band, args.value, args.channel, args.midi_channel,
                    restore=None if args.no_restore else 64, manual=args.manual)

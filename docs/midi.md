@@ -122,26 +122,34 @@ enda kvarvarande vägen till fjärrstyrd PEQ på DSP8000.
 5. Måste enheten stå på EQ-huvudskärmen (som för förfrågan)?
 6. Blockerar PROTECT MEM?
 
-**Testplan** (`rew_to_dsp8000.py push FIL.syx`, som dumpar före, skickar
-filen, dumpar efter och diffar):
+**Testprotokoll** – `./run.sh push FIL.syx` dumpar före, skickar filen,
+väntar 6 s (12 kB @ 31 250 baud ≈ 4 s), dumpar efter och diffar. Före-dumpen
+sparas alltid som `probe_push_before_<tid>.syx` (återställningspunkt).
 
-1. Ställ alla GEQ-band på 0 dB (t.ex. `send` med nollor, eller `push` av
-   `dumps/dsp8000_sysex_0db.syx` senare).
-2. `python rew_to_dsp8000.py push dumps/dsp8000_sysex_p16db.syx` – tryck
-   **inte** på RCV-knappen, bara Enter. Visar displayen +16 dB på alla band
-   (och diffen ändrade GEQ-byte) tar enheten emot dumpar spontant.
-3. Om inget hände: kör igen, men tryck `+` på **RCV MEMORY DUMP** innan Enter.
-4. Om fortfarande inget: prova `4F 0A`-varianten
-   (`dumps/dsp8000_sysex_ondemand.syx`) på samma sätt.
-5. Fungerar det: återställ med `push probe_push_before_<tid>.syx` (före-dumpen
-   sparas alltid) och gå vidare till att patcha en PEQ-post i en dump.
+*Förkrav:* båda MIDI-kablarna i, MIDI ON, EXCL RCV + SND ON, PROTECT MEM av,
+enheten på EQ-huvudskärmen. Extra backup först: `./run.sh grab dumps/backup.syx`.
+
+| Steg | Gör | Tolkning |
+|---|---|---|
+| 0 | **Pre-flight utan enheten:** koppla interface OUT → interface IN. Fönster 1: `./run.sh monitor --seconds 90`. Fönster 2: `./run.sh push --send-only dumps/dsp8000_sysex_p16db.syx` | `monitor` ska rapportera **en SysEx på 12110 byte**. Kortare eller ingen = interfacet tappar långa SysEx, och inget nedan säger då något om enheten |
+| 1 | `./run.sh readback` | Notera GEQ-läget. Står allt redan på +16 dB: ställ om något band så förändringen syns |
+| 2 | `./run.sh push dumps/dsp8000_sysex_p16db.syx`, svara `ja`, tryck **bara Enter** vid knapp-frågan | **A:** diffen visar GEQ → +16 och displayen visar +16: enheten tar emot dumpar spontant, EXCL RCV räcker. **B:** "Ingen byte ändrades": gå till 3. **C:** "Andra dumpen kom inte": enheten bytte läge – kolla displayen, tryck OK/EQ, kör `readback` |
+| 3 | Samma, men tryck `+` på **RCV MEMORY DUMP** innan Enter | Som ovan. Notera vad displayen visar efter `+` (väntar den? timeout?) |
+| 4 | Inget i 2–3: `./run.sh push dumps/dsp8000_sysex_ondemand.syx` (förfrågnings-format `4F 0A 40`), utan och med knappen | Innehållet är en annan kurva (inte +16), så diffen blir stor om det tar |
+| 5 | Ändrades dumpen men inte displayen: Program Change till aktuellt program, sedan `./run.sh readback` | Skiljer på arbetsbuffert (syns direkt) och programminne (syns efter PC) |
+| 6 | Återställ: `./run.sh push probe_push_before_<tid>.syx` (eller ställ tillbaka för hand), sedan `./run.sh readback` | |
+
+Anteckna i testloggen (avsnitt 7): vilket steg som gav effekt, knapp eller
+inte, vilket format, och om det landade i arbetsbufferten eller programminnet.
+
+**Om det fungerar:** nästa steg är ett `syx_tools.py`-kommando som patchar en
+PEQ-post (och GEQ) in i en dump – då kan PEQ skrivas via MIDI. Bygg det först
+då; vad som måste patchas (header, mönstret vid data 39–47) beror på svaren
+på frågorna 2–4.
 
 **Risk:** en mottagen dump kan skriva över arbetsbufferten och de 100
 programmen. Använd bara dumpar från samma enhet. Testenheten är nästan tom
-(~95 % nollor i dumparna), så förlusten är liten – men ta en `grab` först.
-
-**Tidsaspekt:** 12112 byte SysEx tar ~4 s vid 31 250 baud. `push` väntar 6 s
-innan den hämtar "efter"-dumpen.
+(~95 % nollor), så förlusten är liten – men ta backupen först.
 
 ---
 
@@ -320,7 +328,7 @@ felnamngiven capture – och är borttagen.)
 | `python rew_to_dsp8000.py grab FIL.syx` | hämtar dumpen och sparar den |
 | `python rew_to_dsp8000.py probe [--band Hz --value CC --channel left]` | dumpa, sätt ett band via CC, dumpa, diffa (återställer bandet) |
 | `python rew_to_dsp8000.py probe --manual` | dumpa, pausa medan du ändrar EN sak på enheten, dumpa, diffa |
-| `python rew_to_dsp8000.py push FIL.syx` | skicka en dump till enheten (RCV-test, avsnitt 4); dumpar före/efter och diffar |
+| `python rew_to_dsp8000.py push [--send-only] FIL.syx` | skicka en dump till enheten (RCV-test, protokoll i avsnitt 4); dumpar före/efter och diffar. `--send-only`: bara skicka, för loopback-testet av interfacet |
 | `python rew_to_dsp8000.py calibrate [--band Hz]` | verifiera CC→dB mot displayen |
 | `python rew_to_dsp8000.py send [--dry-run] [--verify] [--channel left\|right\|both]` | skicka de 31 banden ur `rew_eq_suggestion.json` |
 | `python syx_tools.py eq FIL.syx` | avkoda GEQ + PEQ ur en sparad dump (stdlib, ingen MIDI) |

@@ -392,7 +392,7 @@ Kommandotabell i `docs/midi.md` avsnitt 8; de viktigaste:
 | `send [--channel left\|right\|both] [--verify]` | skickar (frågar först); `--verify` läser tillbaka dumpen och rapporterar band som inte landade |
 | `readback` | hämtar dumpen och skriver ut 31+31 GEQ-band + 6 PEQ-filter |
 | `grab FIL.syx` / `probe` / `probe --manual` | spara dump / kartlägg dumpen (dumpa, ändra en sak, dumpa, diffa) |
-| `push FIL.syx` | skicka en dump till enheten – testet av RCV MEMORY DUMP |
+| `push [--send-only] FIL.syx` | skicka en dump till enheten – testet av RCV MEMORY DUMP, protokoll i `docs/midi.md` avsnitt 4 |
 | `calibrate` | verifiera `CC = 64 + dB×4` mot displayen |
 | `monitor` / `sysex` / `ports` | lyssna / SysEx-förfrågan / lista portar |
 

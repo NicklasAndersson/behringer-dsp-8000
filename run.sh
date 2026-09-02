@@ -23,7 +23,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh sysex                  fråga enheten via SysEx (dumpar minnet, se docs/midi.md)
   ./run.sh readback               läs enhetens GEQ-band + 6 PEQ-filter ur dumpen (ändrar inget)
   ./run.sh grab FIL.syx           hämta en dump och spara (bygg bibliotek av kända tillstånd)
-  ./run.sh push FIL.syx           skicka en dump till enheten (test av RCV MEMORY DUMP, docs/midi.md avsnitt 4)
+  ./run.sh push [--send-only] FIL.syx  skicka en dump till enheten (RCV MEMORY DUMP-test, protokoll i docs/midi.md avsnitt 4)
   ./run.sh probe [--band N --value CC]  dumpa, sätt ett band via CC, dumpa, diffa
   ./run.sh probe --manual         dumpa, pausa medan du ändrar PEQ/delay på enheten, dumpa, diffa
   ./run.sh calibrate              kalibrera CC->dB mot enhetens display, en gång per enhet
