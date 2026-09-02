@@ -32,7 +32,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh send [--verify]        skicka de 31 bandvärdena (frågar först); --verify läser tillbaka
 
 Övrigt:
-  ./run.sh gui                    webb-GUI för allt ovan (http://127.0.0.1:8765), svara på frågor i sidan
+  ./run.sh gui                    webb-kontrollpanel: läs/redigera GEQ+PEQ, REW-flöde, kommandopanel (http://127.0.0.1:8765)
   ./run.sh show                   generera + öppna dsp8000_config.html ur rew_eq_suggestion.json
   ./run.sh test                   självtester, kräver varken REW, mido eller enheten
   ./run.sh help                   den här listan
