@@ -223,10 +223,11 @@ knapptryck på enheten och två dumpar.
 
 ### Skrivvägen
 
-- ~~**PEQ-läget PAR/AUT/SGL ligger inte i dumpen**~~ **Avgjort 2026-09-03:** varken
+- ~~**PEQ-läget ligger inte i dumpen**~~ **Avgjort 2026-09-03:** varken
   läget *eller* på/av ligger i dumpen. En `apply` skrevs med PEQ av, PEQ slogs på
   för hand, ny dump hämtades – **noll byte skiljde**. Dumpen bär filtrens värden;
-  inkopplingen sker på fronten. Kvar: slå på PEQ efter varje dump-skrivning.
+  läget (ON/OFF/SGL i FB-D-kolumnen) sätts på fronten. Med **ON** jagar feedback
+  destroyern och flyttar filtren själv – sätt OFF före en `apply`.
 - **Arbetsbuffert kontra programminne.** Readback läser arbetsbufferten och
   den stämmer, men syns en pushad dump direkt på displayen eller först efter
   en Program Change? Och skrivs de 100 programplatserna över?

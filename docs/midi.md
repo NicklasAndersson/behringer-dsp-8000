@@ -325,7 +325,11 @@ Gain-fältet ligger kvar på bit 21–30, oförändrat och verifierat två gång
 Posten helt noll = inga värden satta. Verifierat 2026-09-02: 6 filter satta
 till −6/+1/−2/+16/+12/+6 dB på enheten → exakt match i avkodningen.
 
-**Filtrens PÅ/AV och läge (OFF/PAR/AUT/SGL) ligger inte i dumpen.** Verifierat
+**Filtrens läge ligger inte i dumpen.** På testenheten heter lägena
+**ON / OFF / SGL** i FB-D-kolumnen (DSP8024-dokumentationen skriver
+OFF/PAR/AUT/SGL, bilaga A `1E`). ON = feedback destroyern jagar och **flyttar
+filtret själv**, SGL = single shot, OFF = filtret står still och används som
+parametriskt. Verifierat
 2026-09-03: en `apply` skrevs med PEQ avslaget, PEQ slogs sedan på för hand på
 enheten och en ny dump hämtades – **noll byte skiljde**. Dumpen bär filtrens
 *värden*, inte om de är inkopplade. Efter en dump-skrivning måste PEQ alltså
@@ -387,7 +391,7 @@ Ett fält som gränsar till ett annat avslöjar sig när grannen är **negativ**
 sätt därför alltid ett negativt provvärde, inte bara ett positivt.
 
 Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
-0–12 och mönstret vid data 39/199), **PEQ-läget** PAR/AUT/SGL, och
+0–12 och mönstret vid data 39/199), **PEQ-läget** ON/OFF/SGL, och
 **programplatserna** (byt program på enheten, diffa).
 
 ---
@@ -453,8 +457,9 @@ Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
   flyttade våra tre filter (53/74/166 Hz) till ~15,9–16,1 kHz och 20 kHz mellan
   skrivningen och avläsningen 12 minuter senare, och att FB-D-sidans
   FREQUENCY-kolumn visade värden som inte fanns i dumpen (två bit-identiska
-  poster visade 89 Hz respektive 9,2 kHz). **Slå av feedback destroyern / sätt
-  PEQ-läge PAR innan en `apply`**, annars skriver enheten över frekvenserna.
+  poster visade 89 Hz respektive 9,2 kHz). Alla sex filtren stod på **ON** i
+  FB-D-kolumnen, dvs. i jaktläge. **Sätt FB-D till OFF på alla sex innan en
+  `apply`** (lägena är ON/OFF/SGL), annars skriver enheten över frekvenserna.
   Kvar att verifiera: att våra frekvenser står kvar när destroyern är av.
 - **Master rörs inte av en skrivning** – bekräftat på riktig data: basen hade master
   −8,5 / −8 dB (enhetens eget läge, bekräftat av användaren) och de värdena står kvar
