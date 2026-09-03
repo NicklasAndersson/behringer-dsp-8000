@@ -640,15 +640,13 @@ def test_suggestion_to_geq_peq_pads_missing_peq():
     assert peqs[0] and peqs[1] and all(peqs[k] is None for k in (2, 3, 4, 5)), peqs
 
 
-def test_apply_end_to_end_with_fake_midi():
-    """apply med fejkad MIDI: bas hämtas, JSON patchas in, patchad dump pushas
-    som EN sysex, återläsning verifieras. Bygger JSON + bas i en temp-katalog."""
+def test_apply_sends_21_and_22_with_fake_midi():
+    """apply med fejkad MIDI: JSON -> två SysEx direkt (21 grafisk EQ + 22 PEQ),
+    ingen dump hämtas, ingen fil skrivs. Master 0 dB (= 32)."""
     import builtins
     import contextlib
     import io
     import types
-    here = Path(__file__).parent
-    base = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
     sent = []
 
     class FakePort:
@@ -661,6 +659,7 @@ def test_apply_end_to_end_with_fake_midi():
     m.mido = types.SimpleNamespace(
         Message=lambda type, data: types.SimpleNamespace(type=type, data=list(data)))
     m.open_output = m.open_input = FakePort
+    m.grab_dump = lambda out, inp: (_ for _ in ()).throw(AssertionError("apply ska inte läsa"))
     try:
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
              contextlib.redirect_stdout(io.StringIO()):
@@ -670,46 +669,81 @@ def test_apply_end_to_end_with_fake_midi():
                 "graphic_band_gains_db": gains,
                 "peq_filters": [{"frequency": 50, "gaindB": -6, "q": 4}]}))
             m.JSON_FILE = Path("rew_eq_suggestion.json")
-            # bas hämtas först, sedan återläsning = den patchade (device tog emot)
-            grabs = iter([base[1:-1]])
-            m.grab_dump = lambda out, inp: (next(grabs) if sent == []
-                                            else bytes(sent[-1].data))
-            answers = iter(["", "ja"])                    # checklista, bekräfta
-            builtins.input = lambda prompt="": next(answers)
-            m.apply()
-            applied = _one(Path(d).glob("history/writes/applied-*.syx")).read_bytes()
-            g = syx_tools.decode_geq(applied)
-            assert g["L"][17] == 3.0 and g["R"][17] == 3.0
-            pq = syx_tools.decode_peq(applied)
-            assert pq[0]["on"] and pq[0]["gain_db"] == -6.0 and pq[1] == pq[0]
-        assert len(sent) == 1 and sent[0].type == "sysex" and len(sent[0].data) == 12110
-        assert bytes(sent[0].data) == applied[1:-1]
+            builtins.input = lambda prompt="": "ja"
+            assert m.apply() == []                       # inte verifierat -> tom lista
+            assert not list(Path(d).glob("history/**/*")), "inget ska sparas"
+        assert len(sent) == 2 and all(x.type == "sysex" for x in sent)
+        a, b = bytes(sent[0].data), bytes(sent[1].data)
+        assert a[:7] == bytes([0, 0x20, 0x32, 0, 1, 0x21, 0]) and len(a) == 5 + 66
+        L, R = a[7:39], a[39:71]
+        assert L[17] == 38 and L[31] == 32 and R == L      # 1 kHz +3 dB, master 0 dB
+        assert b[:7] == bytes([0, 0x20, 0x32, 0, 1, 0x22, 0]) and len(b) == 5 + 34
+        recs = syx_tools.unpack7(b[7:])
+        assert recs[0:2] == bytes([4, 0]), recs[:4]                       # 50 Hz = band 4, finsteg 0
+        assert recs[3] == (-12) & 0xFF and recs[4:8] == recs[0:4], recs[:8]   # 50 Hz -6 dB, R1 = L1
+        assert recs[8:28] == bytes(20), "filter 2-3 OFF, fyll 0"
     finally:
         m.mido, m.open_output, m.open_input, m.grab_dump, m.JSON_FILE, builtins.input = saved
 
 
-def test_apply_dry_run_with_base_needs_no_device():
+def test_apply_dry_run_needs_no_device():
     import builtins
     import contextlib
     import io
-    here = Path(__file__).parent
-    base_src = here / "dumps" / "dsp8000_sysex_0db.syx"
     saved = (m.open_output, m.open_input, m.JSON_FILE, builtins.input)
     m.open_output = m.open_input = lambda *a: (_ for _ in ()).throw(
-        AssertionError("dry-run med --base ska inte röra MIDI"))
+        AssertionError("dry-run ska inte röra MIDI"))
     try:
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
              contextlib.redirect_stdout(io.StringIO()):
-            (Path(d) / "base.syx").write_bytes(base_src.read_bytes())
             Path("rew_eq_suggestion.json").write_text(json.dumps({
                 "graphic_band_gains_db": {"1000": -4.0}, "peq_filters": []}))
             m.JSON_FILE = Path("rew_eq_suggestion.json")
             builtins.input = lambda *a: (_ for _ in ()).throw(AssertionError("ska inte fråga"))
-            m.apply(base_path="base.syx", dry_run=True)
-            g = syx_tools.decode_geq(_one(Path(d).glob("history/writes/applied-*.syx")).read_bytes())
-            assert g["L"][17] == -4.0 and g["R"][17] == -4.0
+            msgs = m.apply(dry_run=True)
+            assert msgs[0][2 + 17] == 32 - 8 and msgs[0][2 + 31] == 32       # -4 dB, master 0
+            assert msgs[1] == bytes([0x22, 0]) + bytes(32)                   # inga filter
     finally:
         m.open_output, m.open_input, m.JSON_FILE, builtins.input = saved
+
+
+def test_eq_messages_match_hardware_verified_bytes():
+    """Kommando 22-raden som enheten tog emot 2026-09-03 (kurvans 53/74/166 Hz,
+    docs/midi.md 6.8) ska packas till exakt de byten; 21 ska ge 32 = 0 dB med
+    master sist per kanal; pack7/unpack7 är varandras inverser."""
+    peqs = ([{"freq_hz": 53.25, "bw_oct": 37 / 60, "gain_db": -10.0}] * 2
+            + [{"freq_hz": 75.75, "bw_oct": 34 / 60, "gain_db": -11.0}] * 2
+            + [{"freq_hz": 166.0, "bw_oct": 28 / 60, "gain_db": -11.5}] * 2)
+    want = bytes([0x22, 0]) + bytes.fromhex(
+        "0201244e60100a24760121720f280a0f107a4110186f520901467d1000000000")
+    assert syx_tools.peq_message(peqs) == want
+    assert syx_tools.unpack7(want[2:])[:24] == bytes.fromhex(
+        "040524ec040524ec050f21ea050f21ea09031be909031be9")
+    flat = syx_tools.geq_message([0.0] * 31, [0.0] * 31)
+    assert flat == bytes([0x21, 0]) + bytes([32] * 64)
+    L = [0.0] * 31; L[17] = 8.0
+    msg = syx_tools.geq_message(L, [0.0] * 31, master_L_db=-8.5, master_R_db=-8.0, prog=9)
+    assert msg[1] == 9 and msg[2 + 17] == 48 and msg[2 + 31] == 15 and msg[2 + 63] == 16
+    assert syx_tools.geq_message([-20.0] * 31, [20.0] * 31)[2] == 0          # klipps 0-64
+    assert syx_tools.geq_message([-20.0] * 31, [20.0] * 31)[2 + 32] == 64
+    raw = bytes(range(0, 256, 3))                                             # 86 byte
+    assert syx_tools.unpack7(syx_tools.pack7(raw))[:len(raw)] == raw
+    assert all(x < 128 for x in syx_tools.pack7(raw))
+
+
+def test_verify_written_compares_geq_peq_and_master():
+    here = Path(__file__).parent
+    base = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    geq = [0.0] * 31; geq[5] = -8.0
+    peqs = [{"freq_hz": 63.0, "bw_oct": 1 / 3, "gain_db": -6.0}] * 2 + [None] * 4
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()):
+        got = syx_tools.patch_dump(base, geq, geq, peqs)                  # master 0 i 0db-dumpen
+        assert m.verify_written(geq, peqs, (0.0, 0.0), got) == []
+        edges = (here / "dumps" / "dsp8000_sysex_edges.syx").read_bytes()  # master -0,5/+0,5, band satta
+        bad = m.verify_written(geq, peqs, (0.0, 0.0), edges)
+    assert any("master L" in x for x in bad) and any("GEQ" in x for x in bad), bad
 
 
 def test_run_gui_allowlist_and_streams_help():
@@ -779,51 +813,37 @@ def test_run_gui_device_read_write_and_suggestion():
             rb = run_gui.read_base(r["name"])          # avkodar basen utan enheten
             assert rb["geq_L"] == [0.0] * 31 and "sub 4f 12" in rb["summary"]
 
-            # prepare kräver en explicit, giltig bas
-            for bad in ("", "history/reads/read-nope.syx", "../etc/passwd"):
-                try:
-                    run_gui.device_prepare(bad, [0.0] * 31, [None, None, None])
-                    assert False, bad
-                except run_gui.DeviceError:
-                    pass
-
-            # prepare(base) -> send (EN sysex, ingen readback) -> verify (grab + jämför)
+            # write -> två sysex (21 + 22) direkt, ingen readback; verify -> grab + jämför
             sent.clear()
-            rmod.grab_dump = lambda out, inp: bytes(sent[-1].data) if sent else base[1:-1]
             geq = [0.0] * 31; geq[17] = 3.0
             peq = [{"on": True, "freq_hz": 50, "bw_oct": 0.33, "gain_db": -6.0},
                    {"on": False, "freq_hz": 60, "bw_oct": 0.3, "gain_db": 0},
                    {"on": False, "freq_hz": 60, "bw_oct": 0.3, "gain_db": 0}]
-            prep = run_gui.device_prepare(r["name"], geq, peq)
-            assert prep["applied"].startswith("history/writes/applied-") and prep["base"] == r["name"]
-            assert len(sent) == 0, "prepare ska inte skicka"
-            assert run_gui.device_send()["sent"] == 12112 and len(sent) == 1
+            for bad in ([0.0] * 30, []):
+                try:
+                    run_gui.device_write(bad, peq); assert False, bad
+                except run_gui.DeviceError:
+                    pass
+            w = run_gui.device_write(geq, peq)
+            assert w["sent"] == [66, 34] and w["peq_on"] and len(sent) == 2
+            a = bytes(sent[0].data)
+            assert a[5:7] == b"\x21\x00" and a[7 + 17] == 38 and a[7 + 31] == 32   # +3 dB, master 0
+            assert bytes(sent[1].data)[5:7] == b"\x22\x00"
+            got = syx_tools.patch_dump(base, geq, geq, run_gui._peqs6(peq))   # "enheten har det"
+            rmod.grab_dump = lambda out, inp: got[1:-1]
             assert run_gui.device_verify()["mismatches"] == []
-            try:                                       # patched redan poppad
-                run_gui.device_verify(); assert False
-            except run_gui.DeviceError:
-                pass
-            applied = (Path(td) / prep["applied"]).read_bytes()
-            assert sent[0].type == "sysex" and len(sent[0].data) == 12110
-            g = syx_tools.decode_geq(applied); pq = syx_tools.decode_peq(applied)
-            assert g["L"][17] == 3.0 and g["R"][17] == 3.0
-            assert pq[0]["on"] and pq[0]["gain_db"] == -6.0 and pq[2]["on"] is False
-
-            # verify när enheten inte svarar (kvar på RCV-panelen) -> DeviceError
-            sent.clear()
-            run_gui.device_prepare(r["name"], [0.0] * 31, [None, None, None])
-            rmod.grab_dump = lambda out, inp: None
+            rmod.grab_dump = lambda out, inp: (here / "dumps" / "dsp8000_sysex_edges.syx").read_bytes()[1:-1]
+            assert any("master" in x for x in run_gui.device_verify()["mismatches"])
+            rmod.grab_dump = lambda out, inp: None                     # enheten svarar inte
             try:
                 run_gui.device_verify(); assert False
             except run_gui.DeviceError:
                 pass
-            run_gui._prepared.clear()
-
-            # device_write (scriptat): läser själv, patchar, skickar, verifierar
-            sent.clear()
-            rmod.grab_dump = lambda out, inp: bytes(sent[-1].data) if sent else base[1:-1]
-            w = run_gui.device_write([0.0] * 31, [None, None, None])
-            assert w["mismatches"] == [] and w["base"].startswith("history/reads/read-")
+            run_gui._written.clear()
+            try:
+                run_gui.device_verify(); assert False
+            except run_gui.DeviceError:
+                pass
 
             # suggestion: explicit filnamn, history/ före repo-roten, nyaste först
             (Path(td) / "rew_eq_suggestion.json").write_text(json.dumps({
@@ -846,7 +866,7 @@ def test_run_gui_device_read_write_and_suggestion():
         finally:
             (rmod.mido, rmod.open_output, rmod.open_input, rmod.grab_dump,
              run_gui.HERE) = saved
-            run_gui._prepared.clear()
+            run_gui._written.clear()
 
 
 def test_run_gui_device_read_errors_without_mido():

@@ -5,7 +5,9 @@ Steg 2: rew_eq_suggestion.json -> DSP8000. Två separata skrivvägar:
     Control Change. Snabbt och inkrementellt, men bara GEQ, och enheten tappar
     meddelanden om de kommer i en klump (`send --verify` läser tillbaka och
     säger till). Rör inte PEQ.
-  * Hel minnesdump (`apply` / `push`): patchar enhetens dump med GEQ *och* PEQ
+  * SysEx 21 + 22 (`apply`): skriver GEQ *och* PEQ direkt till arbetsbufferten,
+    inget knapptryck, ingen bas-dump (EQ-Design:s kommandon, docs/midi.md 6.8)
+  * Hel minnesdump (`push` / `roundtrip`): patchar enhetens dump med GEQ *och* PEQ
     och pushar tillbaka i ett svep (RCV MEMORY DUMP). Atomiskt, allt-eller-
     inget, skriver båda. `roundtrip` är det fristående hårdvarutestet av den
     här vägen.
@@ -29,7 +31,7 @@ Användning:
     python rew_to_dsp8000.py grab FIL.syx        # spara en dump
     python rew_to_dsp8000.py probe [--manual]    # dumpa, ändra en sak, dumpa, diffa
     python rew_to_dsp8000.py push [--send-only] FIL.syx   # skicka en dump till enheten (RCV-test)
-    python rew_to_dsp8000.py apply [--dry-run] [--base FIL]  # patcha en dump med JSON:en (GEQ+PEQ) och pusha
+    python rew_to_dsp8000.py apply [--dry-run] [--verify]    # skriv JSON:ens GEQ+PEQ direkt (SysEx 21+22)
     python rew_to_dsp8000.py roundtrip [--keep]  # hårdvarutest: skriv känt GEQ+PEQ-mönster via dump, läs tillbaka, återställ
     python rew_to_dsp8000.py calibrate           # interaktiv kalibrering
     python rew_to_dsp8000.py send --dry-run      # visa vad som skulle skickas
@@ -503,61 +505,83 @@ def send(channel="both", midi_channel=1, dry_run=False, verify=False):
           + ("" if not bad else f" - {bad} tappade, kör send igen") + ".")
 
 
-def apply(base_path=None, dry_run=False):
-    """Hela skrivvägen via minnesdumpen: hämta enhetens nuvarande dump (eller en
-    --base-fil), patcha in GEQ + PEQ ur rew_eq_suggestion.json, pusha tillbaka och
-    läs tillbaka för att bekräfta. Skriver BÅDE grafisk EQ och parametriska filter
-    (till skillnad från `send`, som bara gör GEQ via CC och lämnar PEQ för hand).
+def eq_messages(geq, peqs, master=(0.0, 0.0)):
+    """De två SysEx-payloads (efter modellbyten, utan F7) som skriver GEQ + PEQ
+    direkt: EQ-Design:s 21 (grafisk EQ, samma kurva på L och R, master enligt
+    `master`) och 22 (de sex PEQ-posterna). docs/midi.md 6.8."""
+    return [syx_tools.geq_message(geq, geq, master[0], master[1]),
+            syx_tools.peq_message(peqs)]
 
-    Utgår från en färsk dump så allt vi inte förstår (master, delay, gate, limiter,
-    de 100 programmen) bevaras exakt. --base FIL: patcha en sparad dump i stället
-    (t.ex. en knapp-dump i 4F 12-format om enheten inte tar emot förfrågnings-
-    formatet 4F 0A). --dry-run: patcha och spara, pusha inte."""
+
+def write_eq(geq, peqs, master=(0.0, 0.0), verify=False):
+    """Skriv GEQ + PEQ till enheten med 21 + 22 - inget knapptryck, ingen bas-dump,
+    inget utanför arbetsbufferten rörs. Master sätts till `master` (21 skriver
+    alltid master). verify=True: hämta dumpen efteråt och jämför. Returnerar
+    avvikelselistan (tom = allt landade, eller inte verifierat)."""
+    msgs = eq_messages(geq, peqs, master)
+    with open_output() as out, open_input() as inp:
+        for payload in msgs:
+            _send_sysex(out, 0x00, 0x01, list(payload))
+            time.sleep(0.1)
+        print(f"  skickade 21 ({len(msgs[0])} byte) + 22 ({len(msgs[1])} byte), inget svar väntas.")
+        if not verify:
+            return []
+        time.sleep(0.5)
+        got = _grab_with_retry(out, inp, "--verify: hämtar dump")
+    return verify_written(geq, peqs, master, b"\xf0" + got + b"\xf7")
+
+
+def verify_written(geq, peqs, master, got):
+    """Jämför det som skrevs med 21/22 (geq på båda kanalerna, peqs, master)
+    mot en återläst dump `got`. Returnerar avvikelselistan."""
+    expected = syx_tools.patch_dump(got, geq_L=geq, geq_R=geq, peqs=peqs)
+    bad = _verify_applied(expected, got, quiet=True)
+    gg = syx_tools.decode_geq(got)
+    for ch, want in zip(("L", "R"), master):
+        have = gg[ch + "_master"] * syx_tools.GEQ_DB_PER_UNIT
+        if abs(have - want) > 0.25:
+            bad.append(f"master {ch}: ville {want:+.1f}, enheten har {have:+.1f} dB")
+    if not bad:
+        print("\nOK: enheten har exakt det som skrevs (GEQ + PEQ + master). "
+              "Verifiera det akustiska resultatet med en REW-sweep.")
+    else:
+        print(f"\n{len(bad)} avvikelser (står enheten på EQ-huvudskärmen, FB-D OFF?):")
+        for line in bad[:20]:
+            print("  " + line)
+    return bad
+
+
+def apply(dry_run=False, verify=False):
+    """Skriv GEQ + PEQ ur rew_eq_suggestion.json direkt till enheten med EQ-Design:s
+    kommandon 21 (grafisk EQ) och 22 (parametriska filter): inget knapptryck, ingen
+    bas-dump, inget som skrivs över utanför arbetsbufferten (docs/midi.md 6.8,
+    verifierat 2026-09-03). Samma kurva och filter på L och R.
+
+    21 skriver även master, som sätts till 0 dB - en varning skrivs ut.
+    --dry-run: visa de två meddelandena, skicka inget (returnerar dem).
+    --verify: läs tillbaka dumpen efteråt och jämför. Dump-vägen finns kvar
+    som `push`/`roundtrip` för backup och återställning."""
     if not JSON_FILE.exists():
         raise SystemExit(f"{JSON_FILE} saknas - kör rew_script.py först.")
     data = json.loads(JSON_FILE.read_text(encoding="utf-8"))
     geq, peqs = suggestion_to_geq_peq(data)
     n_peq = sum(1 for r in peqs[::2] if r)
     print(f"Från {JSON_FILE}: 31 GEQ-band + {n_peq} PEQ-filter (på båda kanalerna).")
-
-    if base_path:
-        base = syx_tools.load(base_path)
-        if not syx_tools.is_memory_dump(base):
-            raise SystemExit(f"{base_path}: inte en minnesdump.")
-        print(f"Bas: {base_path} ({len(base)} byte, sub-kod {base[6]:02x} {base[7]:02x}).")
-    else:
-        with open_output() as out, open_input() as inp:
-            d = _grab_with_retry(out, inp, "Hämtar enhetens nuvarande dump (bas)")
-        base = b"\xf0" + d + b"\xf7"
-        print(f"Bas: färsk dump från enheten ({len(base)} byte, sub-kod {base[6]:02x} {base[7]:02x}).")
-
-    patched = syx_tools.patch_dump(base, geq_L=geq, geq_R=geq, peqs=peqs)
-    out_f = paths.new(paths.WRITES, f"applied-{paths.ts()}.syx")
-    out_f.write_bytes(patched)
-    print(f"\nPatchad dump -> {out_f}. Ändringar mot basen:")
-    _report_dump_diff(base[1:-1], patched[1:-1])
-
+    print("VARNING: master L/R sätts till 0 dB (kommando 21 skriver alltid master).")
+    msgs = eq_messages(geq, peqs)
+    for payload in msgs:
+        print(f"  F0 00 20 32 00 01 {payload.hex(' ')} F7")
     if dry_run:
-        print(f"\n(dry-run: inget skickades. Pusha med: ./run.sh push {out_f})")
-        return
-
-    print("\nChecklista: båda MIDI-kablarna i, MIDI ON, EXCL RCV + SND ON, "
-          "PROTECT MEM av, FB-D OFF på alla sex PEQ-filtren (med ON flyttar "
-          "destroyern dem själv), enheten på EQ-huvudskärmen.")
-    input("Enter när allt stämmer (Ctrl-C avbryter): ")
-    print("Sätt enheten i mottagningsläge: tryck + på RCV MEMORY DUMP "
-          "(en push utan knapptryck landade inte, docs/midi.md avsnitt 4).")
-    if input(f"Klar? Skriva {out_f} till enheten? (ja/nej): ").strip().lower() != "ja":
-        raise SystemExit(f"Avbrutet. Den patchade dumpen finns i {out_f}.")
-    with open_output() as out, open_input() as inp:
-        out.send(mido.Message("sysex", data=list(patched[1:-1])))
-        print(f"  skickade {len(patched)} byte, väntar 6 s...")
-        time.sleep(6)
-        after = _grab_with_retry(out, inp, "Läser tillbaka")
-    _verify_applied(patched, b"\xf0" + after + b"\xf7")
+        print("(dry-run: inget skickades)")
+        return msgs
+    print("\nChecklista: MIDI ON, EXCL RCV ON, FB-D OFF på alla sex PEQ-filtren "
+          "(med ON flyttar destroyern dem själv).")
+    if input("Skriva till enheten? (ja/nej): ").strip().lower() != "ja":
+        raise SystemExit("Avbrutet.")
+    return write_eq(geq, peqs, verify=verify)
 
 
-def _verify_applied(want, got):
+def _verify_applied(want, got, quiet=False):
     """Jämför GEQ + PEQ i den skickade (want) och den återlästa (got) dumpen.
     Returnerar listan med avvikelser (tom = allt landade)."""
     gw, gg = syx_tools.decode_geq(want), syx_tools.decode_geq(got)
@@ -570,12 +594,14 @@ def _verify_applied(want, got):
     for lbl, x, y in zip(syx_tools.PEQ_LABELS, pw, pg):
         if x != y:
             bad.append(f"PEQ {lbl}: ville {syx_tools.peq_str(x)}, enheten har {syx_tools.peq_str(y)}")
+    if quiet:
+        return bad
     if not bad:
         print("\nOK: enheten har exakt det som skrevs (GEQ + PEQ). "
               "Verifiera det akustiska resultatet med en REW-sweep.")
     else:
         print(f"\n{len(bad)} avvikelser - dumpen togs kanske inte emot "
-              "(prova --base med en knapp-dump i 4F 12-format, docs/midi.md avsnitt 4):")
+              "(dump-vägen: prova push med en knapp-dump i 4F 12-format, docs/midi.md avsnitt 4):")
         for line in bad[:20]:
             print("  " + line)
     return bad
@@ -766,11 +792,9 @@ def main():
                     help="vad du ändrar - hamnar i filnamnet (med --manual)")
     pb.add_argument("--manual", action="store_true",
                     help="ingen CC - pausa och gör ändringen på enheten själv (PEQ m.m.)")
-    ap_ = sub.add_parser("apply")
-    ap_.add_argument("--dry-run", action="store_true",
-                     help="patcha och spara dsp8000_applied.syx, pusha inte")
-    ap_.add_argument("--base", metavar="FIL",
-                     help="patcha en sparad dump i stället för en färsk från enheten")
+    ap_ = sub.add_parser("apply", help="skriv JSON:ens GEQ+PEQ direkt (SysEx 21+22, inget knapptryck)")
+    ap_.add_argument("--dry-run", action="store_true", help="visa de två meddelandena, skicka inte")
+    ap_.add_argument("--verify", action="store_true", help="läs tillbaka dumpen efteråt och jämför")
     rt = sub.add_parser("roundtrip")
     rt.add_argument("--keep", action="store_true",
                     help="lämna testmönstret kvar på enheten i stället för att återställa")
@@ -814,7 +838,7 @@ def main():
                    restore=None if args.no_restore else 64, manual=args.manual,
                    cc=args.cc, note=args.note)
     elif args.cmd == "apply":
-        apply(args.base, args.dry_run)
+        apply(args.dry_run, args.verify)
     elif args.cmd == "roundtrip":
         roundtrip(args.keep, args.base)
     elif args.cmd == "send":

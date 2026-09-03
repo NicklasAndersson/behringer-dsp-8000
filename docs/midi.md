@@ -26,7 +26,8 @@ USB som MIDI-interface. Det som *inte* är testat står uttryckligen markerat.
 | Fader-rörelse → läsbar GEQ-status (`33 09`) | DSP → dator | **fungerar** |
 | Läsa GEQ + PEQ ur dumpen | – | **avkodat** (`syx_tools.py eq`, `rew_to_dsp8000.py readback`) |
 | RCV MEMORY DUMP (ladda en dump tillbaka) | dator → DSP | **fungerar med knapptryck** – tryck + på RCV MEMORY DUMP precis före sändning; utan det landar inget (2026-09-03). `push` / `apply` / `roundtrip`, avsnitt 4 |
-| Skriva GEQ + PEQ via dump | dator → DSP | GEQ **verifierat 2026-09-03**. PEQ: SysEx-återläsningen är byte-identisk med det som skrevs, men **PEQ-sidans display visar fel frekvens för post 2–6** (rätt bara för post 0) – ny, oförklarad bugg, avsnitt 7 (12:52). Master och FB-D-läget skrivs inte alls. Delay/gate/limiter: samma väg, bitfälten inte kartlagda |
+| Skriva GEQ + PEQ direkt (`21` + `22`) | dator → DSP | **verifierat 2026-09-03** – inget knapptryck, master sätts till 0 dB; det `apply` och kontrollpanelen skickar (5b) |
+| Skriva GEQ + PEQ via dump | dator → DSP | **verifierat 2026-09-03** (`roundtrip`); sedan samma dag backup-/återställningsväg (`push`/`roundtrip`). "Displaybuggen" 12:52 var vår tre bitar sneda PEQ-post, rättad (avsnitt 7). FB-D-läget ligger inte i dumpen |
 | EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03 (6.8); bilden verifierad mot våra dumpar (programnamn, programnummer), kommandona `21`/`22`/`43`… otestade mot enheten |
 | ADRStudio:s granulära DSP8024-SysEx | – | **dött** på DSP8000 (bilaga A) |
 
@@ -102,10 +103,11 @@ att inte controller-ekon nollställer något – det problemet har vi inte sett.
 
 ## 4. RCV MEMORY DUMP – skriva hela minnet (fungerar med knapptryck)
 
-Vägen till att skriva allt som CC inte når – de 6 parametriska filtren i första
-hand, men också GEQ, master och de 100 programmen. GEQ- och PEQ-blocken är
-avkodade (avsnitt 6.4), så vi kan patcha en dump och pusha tillbaka den (`apply`
-/ `roundtrip`, avsnitt 5b).
+Dump-vägen skriver **allt**: huvudet, arbetsbufferten och de 100 programmen.
+Sedan 2026-09-03 är den backup-/återställningsvägen (`push`, `roundtrip`);
+`apply` skriver GEQ + PEQ med EQ-Design:s `21`/`22` i stället (5b, 6.8).
+Layouten står i 6.8, så en dump kan patchas och pushas tillbaka
+(`syx_tools.patch_dump`, `roundtrip`).
 
 **Status (`roundtrip` 2026-09-03):**
 
@@ -200,40 +202,38 @@ rapporterar band som inte landade.
 
 ---
 
-## 5b. Skriva via dump (`apply`)
+## 5b. Skriva GEQ och PEQ direkt (`apply`)
 
-`apply` är den kompletta skrivvägen och skriver **både** grafisk och parametrisk
-EQ, till skillnad från `send` (CC, bara GEQ):
+`apply` skriver **både** grafisk och parametrisk EQ ur `rew_eq_suggestion.json`
+med EQ-Design:s kommandon (6.8), verifierade mot enheten 2026-09-03:
 
-1. hämtar en färsk dump från enheten (eller `--base FIL`) som utgångspunkt, så
-   allt vi inte förstår bevaras exakt;
-2. patchar in de 31 GEQ-banden och upp till 3 PEQ-filter ur
-   `rew_eq_suggestion.json` (samma kurva och filter på L och R – mätningen är
-   L+R kombinerad), via `syx_tools.patch_dump`;
-3. sparar resultatet som `history/writes/applied-<tid>.syx` och visar diffen mot basen;
-4. pushar dumpen och läser tillbaka för att bekräfta att GEQ + PEQ landade.
+1. `21 00` + 32 L + 32 R: de 31 banden + master per kanal, `dB·2 + 32`
+   (0–64, 32 = 0 dB), opackat – `syx_tools.geq_message`;
+2. `22 00` + 32 packade byte: sex PEQ-poster à 4 byte (L1 R1 L2 R2 L3 R3,
+   samma filter på L och R – mätningen är L+R kombinerad) + 4 byte fyll,
+   7→8-packade – `syx_tools.peq_message`.
 
-`apply --dry-run` gör steg 1–3 utan att skriva (med `--base` behövs ingen enhet
-alls). Kodningen är inversen av avkodningen i avsnitt 6.4: GEQ-värde =
-`dB × 2` (0,5 dB/enhet – **inte** CC-skalan), PEQ `fr/bw/g` enligt formlerna
-där, allt inskrivet MSB-först i den 7-bit-packade strömmen så byten förblir
-< 128. Master rörs inte – avsiktligt, en rumskorrigering ska inte flytta
-utnivån (skalan är känd, 6.4).
+Inget knapptryck, ingen bas-dump, inget utanför arbetsbufferten rörs, och
+enheten svarar inte. `apply --dry-run` skriver ut de två meddelandena;
+`apply --verify` hämtar dumpen efteråt och jämför GEQ, PEQ och master
+(`verify_written`). Kontrollpanelen gör samma sak (`device_write` +
+`device_verify`).
 
-**Före en `apply`: FB-D OFF på alla sex filtren.** Läget ligger inte i dumpen,
-och med ON flyttar destroyern filtren själv (testloggen 2026-09-03).
+**Master sätts till 0 dB.** `21` kan inte utelämna master, och vi förutsätter
+0 dB om inget annat sagts – `apply` varnar. Ska master vara något annat: ställ
+den efteråt på fronten eller via CC 31/63.
 
-**Obs (12:52-testet, avsnitt 7):** även med FB-D OFF och en bit-exakt
-SysEx-återläsning visade PEQ-sidans display fel frekvens för post 2–6.
-Bandbredd och gain stämde. Oklart om det är ett displayfel (löses av att
-bläddra på PEQ-sidan) eller ett verkligt gap i frekvenskodningen för post
-≥ 1 – se avsnitt 7 för detaljerna och nästa test.
+**Före en `apply`: FB-D OFF på alla sex filtren.** Läget ligger varken i
+kommandot eller i dumpen, och med ON flyttar destroyern filtren själv.
 
-**Skilj på de två skrivvägarna:** `send` (CC, ett band i taget) och dump-pushen
-(`apply` / `push` / `roundtrip`) är olika mekanismer. CC är inkrementellt men
-bara GEQ och kan tappa meddelanden; dumpen är atomisk och skriver GEQ + PEQ men
-skriver över hela minnesbilden. `roundtrip` testar bara dump-vägen; `send
---verify` är motsvarigheten för CC-vägen.
+**Programbyten** (`21 <prog>`, `23 <prog>`) skickas som `00`; EQ-Design skickar
+aktuellt program. Om den spelar roll är okänt (readme:s checklista).
+
+**Tre skrivvägar:** `send` (CC, ett band i taget, bara GEQ, kan tappa
+meddelanden), `apply` (`21` + `22`, atomärt, GEQ + PEQ + master) och dumpen
+(`push` / `roundtrip`, hela minnesbilden, kräver knapptryck – backup och
+återställning). `roundtrip` testar dump-vägen, `send --verify` CC-vägen,
+`apply --verify` den direkta.
 
 ---
 
@@ -321,7 +321,7 @@ lagrar. Dumpens värde = (CC − 64) / 2.
 
 **Master** (index 31 och 63, bit 620–627 och 876–883) har exakt samma skala
 som banden. `decode_geq` returnerar master rått – multiplicera med 0,5 för dB.
-`apply` skriver ändå inte master: en rumskorrigering ska inte flytta utnivån.
+`patch_dump` rör inte master; `apply` sätter den till 0 dB via `21` (5b).
 
 > **Rättelse 2026-09-03.** Fram till nu stod här bit 373 och kvarts-dB. Det var
 > en bit fel, och felet tog ut sig självt vid avläsning (ett steg åt vänster
@@ -696,11 +696,14 @@ räknas vid fs = 48 000 Hz.
      skrev till index > 0 i isolation) och som inte skulle försvinna av att
      bara bläddra.
 
-  **Ingen kod är ändrad för det här** – `patch_dump`/`peq_freq_raw` är
-  oförändrade sedan förra commiten. Nästa steg: `apply` med *bara* L1 satt
-  (övriga `None`) för att bekräfta den ensam, sedan `apply` med *bara* L2
-  satt för att se om post-index 2 i isolation beter sig likadant – det
-  skiljer hypotes 1 från 2.
+  **Förklarad samma dag av EQDESIGN.EXE (nedan) – hypotes 2, men felet var
+  vårt.** Posten är fyra hela byte [band, finsteg, bw, gain]; vår låg tre
+  bitar snett och lämnade bandbytens bit 0–2 orörda. För L1 är de bitarna
+  delayens sista (noll) – rätt display; för post 2–6 är de föregående posts
+  kvarlämnade bitar ur basdumpen, så bandindexet blev ≥ 32 och displayen
+  visade 0 Hz / 68 kHz. Bandbredd och gain var byteinriktade och rätt.
+  Återläsningen var "bit-exakt" för att den lästes med samma sneda modell.
+  Rättat i 68d0637; `22`-skrivningen 13:30 visade rätt på PEQ-sidan.
 
 - **EQDESIGN.EXE disassemblerad** (archive.org, 846 kB, MFC/Win95, 6.8).
   Sändaren bygger `F0 00 20 32 <kanal−1> 01 …`; tolv kommandon; 7→8-packningen
@@ -730,6 +733,12 @@ räknas vid fs = 48 000 Hz.
   stod på program 10 – arbetsbufferten ändrades; om byten betyder något
   (skrev vi också i program 1?) är inte kontrollerat.
 
+- **`apply` och kontrollpanelen bygger nu på `21` + `22`** (`eq_messages`,
+  `write_eq`, `verify_written`; GUI:ts `device_write`/`device_verify`).
+  Ingen bas-dump, inget knapptryck; master sätts till 0 dB med varning.
+  Dump-vägen är kvar som `push`/`roundtrip`. `peq_message` låses av testet mot
+  de 32 byte enheten tog emot.
+
 ---
 
 ## 8. Verktyg
@@ -741,11 +750,12 @@ räknas vid fs = 48 000 Hz.
 | `python rew_to_dsp8000.py sysex [--write-test]` | skickar `70 01` med modell `01` och `0E`, sparar svar. `--write-test` provar ADRStudio `10h` |
 | `python rew_to_dsp8000.py readback` | hämtar dumpen och skriver ut 31+31 GEQ-band + 6 PEQ |
 | `python rew_to_dsp8000.py grab FIL.syx` | hämtar dumpen och sparar den |
+| `python rew_to_dsp8000.py raw HEX…` | skicka `F0 00 20 32 00 01 <hex…> F7`, visa/spara svaren (6.8) |
 | `python rew_to_dsp8000.py probe [--band Hz --value CC --channel left]` | dumpa, sätt ett band via CC, dumpa, diffa (återställer bandet) |
 | `python rew_to_dsp8000.py probe --cc N [--value CC]` | samma men ett rått CC-nummer i stället för ett ISO-band: `--cc 31` = vä master, `--cc 63` = hö master |
 | `python rew_to_dsp8000.py probe --manual [--note TEXT]` | dumpa, pausa medan du ändrar EN sak på enheten, dumpa, diffa. `--note` hamnar i filnamnet |
 | `python rew_to_dsp8000.py push [--send-only] FIL.syx` | skicka en dump till enheten (RCV-test, protokoll i avsnitt 4); dumpar före/efter och diffar. `--send-only`: bara skicka, för loopback-testet av interfacet |
-| `python rew_to_dsp8000.py apply [--dry-run] [--base FIL]` | patcha en dump (färsk eller `--base`) med GEQ + PEQ ur `rew_eq_suggestion.json`, pusha och läs tillbaka. Avsnitt 5b |
+| `python rew_to_dsp8000.py apply [--dry-run] [--verify]` | skriv GEQ + PEQ ur `rew_eq_suggestion.json` direkt med SysEx `21` + `22` (inget knapptryck, master 0 dB); `--verify` läser tillbaka. Avsnitt 5b |
 | `python rew_to_dsp8000.py roundtrip [--keep]` | hårdvarutest av dump-vägen: backup → skriv känt GEQ+PEQ-mönster → läs tillbaka + jämför → återställ. Rör inte JSON/CC. Avsnitt 4 |
 | `python rew_to_dsp8000.py calibrate [--band Hz]` | verifiera CC→dB mot displayen |
 | `python rew_to_dsp8000.py send [--dry-run] [--verify] [--channel left\|right\|both]` | skicka de 31 banden ur `rew_eq_suggestion.json` |

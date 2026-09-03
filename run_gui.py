@@ -2,14 +2,11 @@
 Webb-GUI för DSP8000-kedjan. Tre delar på en localhost-sida:
 
   1. REW-flödet steg för steg (mät -> steg 1 -> ladda förslag -> skriv -> mät igen)
-  2. Enhetens EQ: välj en bas-dump (en avläsning eller en dumps/-referens),
-     fyll redigeraren (från ett valt förslag eller basens egen EQ), skriv tillbaka
-     via minnesdumpen (GEQ *och* PEQ, inte bara CC). Allt tidsstämplas i history/
-     och skrivningen patchar *exakt* den valda basen - inga implicita filer.
-     Tredelad med dialog + paus: (1) patcha basen -> history/writes/applied-<ts>.syx,
-     (2) tryck + på RCV MEMORY DUMP -> skicka, (3) enheten tillbaka på EQ-skärmen
-     -> läs tillbaka och jämför (enheten svarar inte på SysEx-förfrågan från
-     RCV-panelen).
+  2. Enhetens EQ: välj en bas-dump (en avläsning eller en dumps/-referens) för
+     att fylla redigeraren och rita kurvan, redigera, skriv till enheten direkt
+     med EQ-Design:s SysEx 21 (grafisk EQ) + 22 (PEQ) - inget knapptryck, ingen
+     dump-push (docs/midi.md 6.8). Master sätts till 0 dB. "Verifiera
+     skrivningen" läser tillbaka dumpen och jämför.
   3. Kommandopanel: en knapp per ./run.sh-kommando, strömmad utskrift, svara
      på skriptens frågor i sidan
 
@@ -49,8 +46,8 @@ COMMANDS = [
         ("ports", "MIDI-portar", "lista in/ut"),
         ("send --dry-run", "Send (dry-run)", "visa CC utan att skicka"),
         ("send --verify", "Send + verify", "skicka 31 band, läs tillbaka ur dumpen"),
-        ("apply --dry-run", "Apply (dry-run)", "patcha dumpen med GEQ+PEQ, pusha inte"),
-        ("apply", "Apply (GEQ+PEQ)", "patcha enhetens dump och pusha tillbaka"),
+        ("apply --dry-run", "Apply (dry-run)", "visa de två SysEx-meddelandena (21+22), skicka inte"),
+        ("apply --verify", "Apply (GEQ+PEQ)", "skriv förslaget direkt (21+22, inget knapptryck), läs tillbaka"),
         ("readback", "Readback", "GEQ + PEQ ur enhetens dump, ändrar inget"),
         ("monitor", "Monitor", "lyssna 30 s på returvägen"),
         ("sysex", "SysEx-förfrågan", "hämta dumpen, spara som .syx"),
@@ -278,68 +275,38 @@ def _peqs6(peq3):
     return out
 
 
-# Skrivvägen via dumpen är tredelad, precis som terminalens roundtrip/apply:
-#   1. device_prepare: patcha den VALDA bas-dumpen (`base`), ingen MIDI
-#   2. device_send:     enheten i mottagningsläge (RCV MEMORY DUMP +) -> pusha
-#   3. device_verify:   enheten tillbaka på EQ-skärmen -> läs tillbaka, jämför
-# GUI:t visar en dialog före varje steg. Den patchade dumpen mellanlagras här.
-_prepared = {}
+# Skrivvägen: EQ-Design:s SysEx 21 (grafisk EQ) + 22 (de sex PEQ-posterna) direkt
+# till arbetsbufferten - inget knapptryck, ingen bas-dump (docs/midi.md 6.8).
+# 21 skriver även master; den sätts till 0 dB. Det senast skrivna mellanlagras
+# så "Verifiera skrivningen" kan läsa tillbaka och jämföra.
+_written = {}
 
 
-def device_prepare(base, geq, peq3):
-    """Steg 1: patcha in geq (31 dB, L+R) + peq3 i den valda bas-dumpen `base`,
-    spara history/writes/applied-<ts>.syx och mellanlagra. Ingen MIDI. `base` är ett
-    explicit filnamn (välj i Bas-listan eller kör "Läs av enheten")."""
-    if not base:
-        raise DeviceError('Ingen bas vald. Välj en avläsning i Bas-listan eller kör '
-                          '"Läs av enheten" - skrivningen patchar exakt den filen.')
+def device_write(geq, peq3):
+    """Skriv redigerarens GEQ (31 dB, samma på L och R) + peq3 till enheten med
+    21 + 22. Master 0 dB. Ingen återläsning - det är device_verify."""
     if len(geq) != 31:
         raise DeviceError(f"GEQ behöver 31 värden, fick {len(geq)}.")
-    full = _load_dump(base, "*.syx")
     geq = [float(x) for x in geq]
-    patched = syx_tools.patch_dump(full, geq, geq, _peqs6(peq3))
-    p = _dir("writes") / f"applied-{time.strftime(TS_FMT)}.syx"
-    p.write_bytes(patched)
-    _prepared.clear()
-    _prepared.update(patched=patched, applied=_rel(p), base=base)
-
-    gb, gp = syx_tools.decode_geq(full), syx_tools.decode_geq(patched)
-    pb, pp = syx_tools.decode_peq(full), syx_tools.decode_peq(patched)
-    changes = []
-    for ch in ("L", "R"):
-        n = sum(1 for x, y in zip(gb[ch], gp[ch]) if abs(x - y) > 0.01)
-        if n:
-            changes.append(f"{n} GEQ-band {ch}")
-    npeq = sum(1 for x, y in zip(pb[::2], pp[::2]) if x != y)
-    if npeq:
-        changes.append(f"{npeq} PEQ-filter")
-    return {"applied": _prepared["applied"], "base": base,
-            "changes": changes or ["inga ändringar mot basen"]}
-
-
-def device_send():
-    """Steg 2: pusha den mellanlagrade dumpen. Enheten måste stå i mottagningsläge
-    (tryck + på RCV MEMORY DUMP). Efter pushen står enheten kvar på RCV-panelen
-    och svarar INTE på SysEx-förfrågan därifrån - återläsningen är ett eget steg
-    (device_verify) med en paus för att ställa enheten tillbaka på EQ-skärmen."""
-    patched = _prepared.get("patched")
-    if patched is None:
-        raise DeviceError("Inget förberett - kör Skriv-steget (steg 1) igen.")
+    peqs = _peqs6(peq3)
     d = _midi()
+    msgs = d.eq_messages(geq, peqs)
     with devlock:
         with d.open_output() as out:
-            out.send(d.mido.Message("sysex", data=list(patched[1:-1])))
-            time.sleep(5)       # 12 kB @ 31250 baud ≈ 4 s - håll porten öppen tills allt gått ut
-    return {"sent": len(patched), "applied": _prepared.get("applied")}
+            for payload in msgs:
+                d._send_sysex(out, 0x00, 0x01, list(payload))
+                time.sleep(0.1)
+    _written.clear()
+    _written.update(geq=geq, peqs=peqs)
+    return {"sent": [len(m) for m in msgs], "master_db": 0.0,
+            "peq_on": any(r is not None for r in peqs)}
 
 
 def device_verify():
-    """Steg 3: enheten tillbaka på EQ-huvudskärmen -> hämta dumpen och jämför
-    GEQ + PEQ mot det som skrevs. {mismatches:[...], peq_on: bool}. Kör om (knappen
-    "Verifiera skrivningen") om enheten inte hann tillbaka till EQ-skärmen."""
-    patched = _prepared.get("patched")
-    if patched is None:
-        raise DeviceError("Inget att verifiera - kör Skriv-steget (steg 1) först.")
+    """Hämta dumpen och jämför GEQ + PEQ + master mot det senast skrivna.
+    {mismatches:[...], peq_on: bool}. Enheten måste stå på EQ-huvudskärmen."""
+    if not _written:
+        raise DeviceError("Inget att verifiera - skriv först.")
     d = _midi()
     with devlock:
         with d.open_output() as out, d.open_input() as inp:
@@ -348,31 +315,9 @@ def device_verify():
         raise DeviceError("Ingen återläsning. Ställ enheten på EQ-huvudskärmen "
                           "(SysEx-förfrågan besvaras bara därifrån) och klicka "
                           "Verifiera skrivningen igen.")
-    got = b"\xf0" + after + b"\xf7"
-    gw, gg = syx_tools.decode_geq(patched), syx_tools.decode_geq(got)
-    pw, pg = syx_tools.decode_peq(patched), syx_tools.decode_peq(got)
-    bad = []
-    for ch in ("L", "R"):
-        for f, x, y in zip(dsp8000.ISO_BANDS, gw[ch], gg[ch]):
-            if abs(x - y) > 0.25:
-                bad.append(f"GEQ {ch} {f:g} Hz: ville {x:+.2f}, fick {y:+.2f}")
-    for lbl, x, y in zip(syx_tools.PEQ_LABELS, pw, pg):
-        if x != y:
-            bad.append(f"PEQ {lbl}: ville {syx_tools.peq_str(x)}, fick {syx_tools.peq_str(y)}")
-    if not bad:
-        _prepared.pop("patched", None)
-    return {"mismatches": bad, "peq_on": any(r["on"] for r in pw),
-            "applied": _prepared.get("applied")}
-
-
-def device_write(geq, peq3):
-    """read + prepare + send + verify i följd, utan dialogerna emellan - för
-    självtestet och scriptad användning. GUI:t kör stegen var för sig med paus
-    emellan. Basen är en egen färsk avläsning."""
-    r = device_read()
-    device_prepare(r["name"], geq, peq3)
-    device_send()
-    return {"applied": _prepared.get("applied"), "base": r["name"], **device_verify()}
+    bad = d.verify_written(_written["geq"], _written["peqs"], (0.0, 0.0),
+                           b"\xf0" + after + b"\xf7")
+    return {"mismatches": bad, "peq_on": any(r is not None for r in _written["peqs"])}
 
 
 SUGGESTION_GLOBS = ("suggestion-*.json", "rew_eq_suggestion*.json")
@@ -475,12 +420,11 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
  <button id="verify">Verifiera skrivningen</button>
  <span id="status2">&nbsp;</span>
 </div>
-<p class="muted">Skrivningen patchar <b>exakt den valda bas-dumpen</b> med redigerarens
- GEQ + PEQ och sparar <code>history/writes/applied-&lt;tid&gt;.syx</code> – ingen implicit
- "senaste"-fil. Tre steg med dialog: <b>(1)</b> patcha, <b>(2)</b> tryck
- <b>+ på RCV MEMORY DUMP</b> → skicka, <b>(3)</b> enheten <b>tillbaka på EQ-skärmen</b>
- → läs tillbaka och jämför. Gick steg 3 fel: klicka <b>Verifiera skrivningen</b> när
- enheten står rätt. "Läs av enheten" efteråt ger en ny bas för nästa varv.</p>
+<p class="muted">Skrivningen skickar redigerarens GEQ + PEQ <b>direkt</b> till enhetens
+ arbetsbuffert (SysEx <code>21</code> + <code>22</code>, docs/midi.md 6.8) – inget
+ knapptryck, ingen bas-dump. <b>Master sätts till 0 dB.</b> FB-D ska stå på OFF på alla
+ sex filtren. "Verifiera skrivningen" läser tillbaka dumpen och jämför. Basen i steg 1
+ används bara för att fylla redigeraren och rita den streckade kurvan.</p>
 <p class="muted" id="editorFrom">Redigeraren: tom</p>
 
 <div class="bar">
@@ -794,33 +738,16 @@ $('runRefine').onclick = () => {
 loadMeasList(); loadSugList(); loadBaseList();
 
 async function writeDevice() {
-  const base = $('baseSel').value;
-  if (!base) return say('välj en bas-dump (eller "Läs av enheten") först', 'err');
-  if (!confirm('Steg 1/3: patcha.\n\nRedigerarens GEQ + PEQ patchas in i basen:\n'
-      + base + '\n\nInget skickas än.')) return;
-  say('steg 1/3: patchar basen …');
-  let prep;
-  try { prep = await jpost('/device/prepare', {base, geq: getEditorGeq(), peq: getEditorPeq()}); }
-  catch (e) { return say(e, 'err'); }
-  say('patchad → ' + prep.applied + ': ' + prep.changes.join(', '), 'ok');
-
-  if (!confirm('Steg 2/3: skicka.\n\n' + prep.applied + '\nÄndringar mot basen: '
-      + prep.changes.join(', ') + '.\n\nFB-D OFF på alla PEQ-filter? Tryck sedan + på RCV MEMORY DUMP på enheten NU '
-      + '(mottagningsläge), klicka sedan OK. En push utan mottagningsläge landar inte.')) {
-    return say('avbrutet – inget skickat. Patchad dump: ' + prep.applied + '.', '');
-  }
-  say('steg 2/3: skickar dumpen … (~6 s, rör inte enheten)');
-  try { await jpost('/device/send'); }
-  catch (e) { return say(e, 'err'); }
-
-  if (!confirm('Steg 3/3: verifiera.\n\nDumpen är skickad. Enheten står nu på '
-      + 'RCV MEMORY DUMP-panelen och svarar inte på läsförfrågan därifrån.\n\n'
-      + 'Ställ enheten TILLBAKA på EQ-huvudskärmen, klicka sedan OK så läses '
-      + 'skrivningen tillbaka och jämförs.')) {
-    return say('skickat men inte verifierat. Klicka "Verifiera skrivningen" när '
-      + 'enheten är på EQ-huvudskärmen.', '');
-  }
-  verifyWrite();
+  if (!confirm('Skriv till enheten.\n\nRedigerarens GEQ + PEQ skickas direkt (SysEx 21 + 22), '
+      + 'inget knapptryck behövs.\n\nMaster sätts till 0 dB på båda kanalerna.\n'
+      + 'FB-D OFF på alla sex PEQ-filter?')) return;
+  say('skickar 21 + 22 …');
+  try {
+    const r = await jpost('/device/write', {geq: getEditorGeq(), peq: getEditorPeq()});
+    say('skickat (' + r.sent.join(' + ') + ' byte), master 0 dB. '
+      + (r.peq_on ? 'FB-D-läget ligger inte i kommandot – står det på ON flyttar destroyern filtren. ' : '')
+      + 'Kolla displayen, eller klicka "Verifiera skrivningen" (läser tillbaka, ~5 s).', 'ok');
+  } catch (e) { say(e, 'err'); }
 }
 
 async function verifyWrite() {
@@ -828,12 +755,11 @@ async function verifyWrite() {
   try {
     const d = await jpost('/device/verify');
     if (!d.mismatches.length) {
-      say('OK: enheten läser tillbaka exakt det som skrevs (' + (d.applied || 'applied')
-        + '). ' + (d.peq_on ? 'FB-D-läget (ON/OFF/SGL) ligger inte i dumpen – står det på ON flyttar destroyern filtren, kolla PEQ-sidan. ' : '')
-        + 'Verifiera akustiskt med en REW-sweep. "Läs av enheten" ger en ny bas för nästa varv.', 'ok');
+      say('OK: enheten har exakt det som skrevs (GEQ + PEQ + master 0 dB). '
+        + 'Verifiera akustiskt med en REW-sweep. "Läs av enheten" ger en ny bas att utgå från.', 'ok');
     } else {
       say(d.mismatches.length + ' avvikelser: ' + d.mismatches.slice(0,3).join(' · ')
-        + ' – togs dumpen emot? Tryck RCV MEMORY DUMP + och kör Skriv igen.', 'err');
+        + ' – står enheten på EQ-huvudskärmen och FB-D OFF? Skriv igen.', 'err');
     }
   } catch (e) { say(e, 'err'); }
 }
@@ -943,10 +869,6 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/device/cc":
                 self._device(device_cc, body.get("idx"), body.get("db"),
                              body.get("channel", "both"))
-            elif self.path == "/device/prepare":
-                self._device(device_prepare, body.get("base"), body.get("geq", []), body.get("peq", []))
-            elif self.path == "/device/send":
-                self._device(device_send)
             elif self.path == "/device/verify":
                 self._device(device_verify)
             elif self.path == "/device/write":

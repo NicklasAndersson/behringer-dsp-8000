@@ -47,13 +47,11 @@ kablarna i, och enhetens MIDI-sida inställd enligt [midi.md avsnitt 2](midi.md#
 3. Annan enhet än testenheten? `./run.sh calibrate` en gång: kolla att
    `CC = 64 + dB×4` stämmer och att `dsp8000.CC_OFFSET` = enhetens `CNTL RCV`
 4. Sätt **FB-D OFF** på alla sex PEQ-filtren (PEQ-sidan på enheten) – med ON
-   flyttar feedback destroyern filtren själv, och läget ligger inte i dumpen.
-   `./run.sh apply` → GEQ **och** PEQ skrivs i ett svep genom att patcha
-   enhetens dump och pusha tillbaka. **Tryck + på RCV MEMORY DUMP** när
-   skriptet pausar – utan det landar dumpen inte. `apply` läser tillbaka och
-   bekräftar. (`--dry-run` visar och sparar den patchade dumpen först.)
-   Alternativ, bara grafisk EQ via CC: `./run.sh send --verify`, och ställ då
-   de ≤3 parametriska filtren för hand
+   flyttar feedback destroyern filtren själv. `./run.sh apply --verify` →
+   GEQ **och** PEQ skickas direkt till enheten (SysEx `21` + `22`, inget
+   knapptryck, [midi.md 5b](midi.md#5b-skriva-geq-och-peq-direkt-apply)) och läses tillbaka.
+   **Master sätts till 0 dB.** `--dry-run` visar de två meddelandena.
+   Alternativ, bara grafisk EQ via CC: `./run.sh send --verify`
 5. Ny sweep med EQ:n **aktiv** (LED tänd) → det akustiska resultatet
 6. `./run.sh refine` på den nya mätningen → skriv igen → mät igen. Ett–två
    varv räcker normalt
@@ -69,26 +67,22 @@ localhost. Tre numrerade val, inget implicit:
 
 1. **Bas-dump** – dropdown med dina avläsningar (`history/reads/*.syx`) och
    `dumps/`-referenserna. *Läs av enheten* sparar en ny
-   `history/reads/read-<tid>.syx` och väljer den. Skrivningen patchar *exakt*
-   den valda filen – aldrig en dump som hämtas i skrivögonblicket. (Då riskerar
-   man att fånga enheten mitt i ett lägesbyte och pusha tillbaka en trasig bild
-   av master/limiter/gate; det har hänt, se [midi.md testlogg](midi.md#7-testlogg).)
+   `history/reads/read-<tid>.syx` och väljer den. Basen fyller redigeraren
+   (*Basens EQ →*) och ritar den streckade kurvan – skrivningen behöver den
+   inte.
 2. **Fyll redigeraren** – från ett valt förslag (`history/suggestions/*.json`
    plus committade `rew_eq_suggestion*.json`) eller *Basens EQ →*. GEQ:n är 31
    lodräta reglage; en **EQ-kurva** ovanför visar summan av GEQ+PEQ, var för
    sig, och den valda basen (streckad), live medan du drar. Raden under
    redigeraren visar vilken fil värdena kom från.
-3. **Skriv** i tre steg med paus: (1) patcha basen →
-   `history/writes/applied-<tid>.syx`, (2) tryck + på RCV MEMORY DUMP →
-   skicka, (3) enheten tillbaka på EQ-huvudskärmen → läs tillbaka och jämför.
-   Efter en push står enheten på RCV-panelen och svarar inte på läsförfrågan
-   därifrån; *Verifiera skrivningen* kör om steg 3. Nästa varv: *Läs av
-   enheten* igen för en färsk bas.
+3. **Skriv** – redigerarens GEQ + PEQ skickas direkt (SysEx `21` + `22`),
+   inget knapptryck, master 0 dB. *Verifiera skrivningen* läser tillbaka
+   dumpen (enheten på EQ-huvudskärmen) och jämför GEQ, PEQ och master.
 
 **Direktredigering** (kryssruta): GEQ-reglagen skickar ett Control Change
 direkt till enheten per band – samma väg som `send`, snabb finjustering utan
 dump-cykel. Ändrar bara enhetens grafiska EQ, *inte* bas-filen, PEQ eller
-master; läs av enheten igen innan en dump-skrivning ovanpå.
+master; en skrivning efteråt skickar redigerarens värden, inte enhetens.
 
 Att skapa förslag ur en REW-mätning och hela `run.sh`-kommandopanelen ligger i
 varsin hopfällbar sektion.
@@ -97,21 +91,23 @@ varsin hopfällbar sektion.
 
 ## `rew_to_dsp8000.py` – skriva till enheten
 
-**Två separata skrivvägar** ([midi.md 5b](midi.md#5b-skriva-via-dump-apply)):
+**Tre skrivvägar** ([midi.md 5b](midi.md#5b-skriva-geq-och-peq-direkt-apply)):
 
 - **CC, ett band i taget** (`send`): de 31 grafiska banden som var sitt Control
   Change. Inkrementellt och snabbt, men bara GEQ, och enheten tappar
   meddelanden om de kommer i en klump – `send --verify` läser tillbaka och
   rapporterar vad som inte landade.
-- **Hel minnesdump** (`apply`): patchar enhetens dump med GEQ **+ PEQ** och
-  pushar tillbaka i ett svep. Atomiskt, skriver båda, men skriver över hela
-  minnesbilden. `roundtrip` är hårdvarutestet av den vägen.
+- **Direkt via SysEx `21` + `22`** (`apply`): GEQ **+ PEQ** i två meddelanden
+  till arbetsbufferten, inget knapptryck, ingen bas-dump. Master sätts till
+  0 dB (varning). `--verify` läser tillbaka.
+- **Hel minnesdump** (`push`, `roundtrip`): skriver hela minnesbilden inklusive
+  de 100 programmen, kräver + på RCV MEMORY DUMP. Backup och återställning.
 
 | Kommando | Gör |
 |---|---|
 | `send --dry-run` | visar alla CC utan att skicka |
 | `send [--channel left\|right\|both] [--verify]` | CC-vägen: skickar de 31 banden (frågar först); `--verify` rapporterar band som inte landade |
-| `apply [--dry-run] [--base FIL]` | dump-vägen: patcha dumpen med GEQ **+ PEQ** ur JSON:en, pusha tillbaka, läs tillbaka och bekräfta |
+| `apply [--dry-run] [--verify]` | skriv GEQ **+ PEQ** ur JSON:en direkt (SysEx `21` + `22`, master 0 dB); `--verify` läser tillbaka och jämför |
 | `roundtrip [--keep]` | hårdvarutest av dump-vägen: backup → skriv känt GEQ+PEQ-mönster → läs tillbaka + jämför → återställ |
 | `readback` | hämtar dumpen och skriver ut 31+31 GEQ-band + 6 PEQ-filter |
 | `grab FIL.syx` | hämta en dump och spara den |
@@ -127,9 +123,9 @@ finns även som `./run.sh <kommando>`.
 `send` skickar **båda kanalerna** som default (Stereolink av på enheten). Med
 Stereolink på räcker `--channel left`.
 
-Dump-vägen **kräver ett tryck på RCV MEMORY DUMP** precis före sändning – både
-`roundtrip`, `apply` och `push` pausar för det, och även återställningen i
-`roundtrip` behöver ett till tryck.
+Dump-vägen **kräver ett tryck på RCV MEMORY DUMP** precis före sändning –
+`roundtrip` och `push` pausar för det, och även återställningen i `roundtrip`
+behöver ett till tryck. `apply` behöver inget.
 
 ---
 

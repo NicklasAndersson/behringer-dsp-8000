@@ -144,11 +144,23 @@ def decode_peq(b):
     return out
 
 
-def unpack_image(b):
-    """Komplett minnesdump (F0…F7) -> minnesbilden på IMAGE_LEN byte, byteinriktad.
-    Samma uppackning som EQ-Design (0x4041d0): 8 packade 7-bitarsbyte -> 7 byte."""
-    bits = _msb_bits(b[7:-1])
+def unpack7(packed):
+    """8 packade 7-bitarsbyte -> 7 byte, MSB-först (EQ-Design 0x4041d0)."""
+    bits = _msb_bits(packed)
     return bytes(_read_uint(bits, i, 8) for i in range(0, len(bits) - 7, 8))
+
+
+def pack7(data):
+    """Inversen: 7 byte -> 8 databyte < 128, MSB-först (EQ-Design 0x403f70).
+    Fylls ut med nollor till jämn 7-grupp."""
+    data = list(data) + [0] * (-len(data) % 7)
+    bits = "".join(f"{x:08b}" for x in data)
+    return bytes(int(bits[i:i + 7], 2) for i in range(0, len(bits), 7))
+
+
+def unpack_image(b):
+    """Komplett minnesdump (F0…F7) -> minnesbilden på IMAGE_LEN byte, byteinriktad."""
+    return unpack7(b[7:-1])
 
 
 def program_name(image, n):
@@ -160,6 +172,33 @@ def program_name(image, n):
 def current_program(image):
     """Aktuellt program, 0-baserat (displayen visar +1). Ligger dubbelt i huvudet."""
     return image[8]
+
+
+def geq_message(geq_L, geq_R, master_L_db=0.0, master_R_db=0.0, prog=0):
+    """EQ-Design:s kommando 21 (payload efter modellbyten): [21, prog, 32 L, 32 R],
+    värde = dB*2 + 32 (0-64, 32 = 0 dB), band 0-30 + master per kanal, opackat.
+    Skriver alltid master - därför tas den i dB, default 0. Verifierat mot
+    enheten 2026-09-03 (docs/midi.md 6.8)."""
+    if len(geq_L) != 31 or len(geq_R) != 31:
+        raise SystemExit("geq_message: 31 bandvärden per kanal.")
+
+    def v(db):
+        return max(0, min(64, round(db * 2) + 32))
+    return bytes([0x21, prog] + [v(x) for x in geq_L] + [v(master_L_db)]
+                 + [v(x) for x in geq_R] + [v(master_R_db)])
+
+
+def peq_message(peqs):
+    """EQ-Design:s kommando 22: [22, 00] + 32 packade byte = 6 poster à 4 byte
+    (L1 R1 L2 R2 L3 R3, None = OFF/noll) + 4 byte fyll. Verifierat 2026-09-03."""
+    if len(peqs) != 6:
+        raise SystemExit("peq_message: 6 poster (L1 R1 L2 R2 L3 R3).")
+    recs = []
+    for rec in peqs:
+        fr, bw, g = ((0, 0, 0) if rec is None
+                     else peq_raw(rec["freq_hz"], rec["bw_oct"], rec["gain_db"]))
+        recs += [fr >> 8, fr & 0xFF, bw, g]
+    return bytes([0x22, 0x00]) + pack7(recs + [0, 0, 0, 0])
 
 
 def bit_diff(a, b, gap=8):

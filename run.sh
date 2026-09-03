@@ -26,7 +26,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh grab FIL.syx           hämta en dump och spara (bygg bibliotek av kända tillstånd)
   ./run.sh raw 43                 skicka F0 00 20 32 00 01 <hex…> F7 och visa svaret (EQ-Design-kommandona, docs/midi.md 6.8)
   ./run.sh push [--send-only] FIL.syx  skicka en dump till enheten (RCV MEMORY DUMP-test, protokoll i docs/midi.md avsnitt 4)
-  ./run.sh apply [--dry-run]      patcha enhetens dump med rew_eq_suggestion.json (GEQ+PEQ) och pusha tillbaka
+  ./run.sh apply [--dry-run] [--verify]  skriv rew_eq_suggestion.json (GEQ+PEQ) direkt till enheten via SysEx 21+22, inget knapptryck; master sätts till 0 dB
   ./run.sh roundtrip [--keep]     hårdvarutest av dump-vägen: skriv känt GEQ+PEQ-mönster, läs tillbaka, återställ
   ./run.sh probe [--band N --value CC]  dumpa, sätt ett band via CC, dumpa, diffa
   ./run.sh probe --cc 31 --value 40    dumpa, sätt vä master via CC, dumpa, diffa (63 = hö master)
