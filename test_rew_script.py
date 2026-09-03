@@ -195,11 +195,43 @@ def test_save_and_load_roundtrip():
         gains[20] = 3.0
         r.save_output({"id": "1"}, [{"type": "PK", "frequency": 44, "gaindB": -12, "q": 3}],
                       gains, path=path)
-        peq, back = r.load_previous_output(path)
+        peq, back, origin = r.load_previous_output(path)
         assert back == gains, back                 # "31.5"/"20" -> 31.5/20
         assert peq[0]["frequency"] == 44
+        assert origin == {"id": "1"}                # ingen --refine-kedja -> origin = measurement
         m.JSON_FILE = path
         assert m.load_band_gains() == gains
+
+
+def test_save_output_carries_origin_and_records_diff():
+    with tempfile.TemporaryDirectory() as d:
+        p1 = Path(d) / "round1.json"
+        gains1 = {f: 0.0 for f in dsp8000.ISO_BANDS}
+        gains1[1000] = -2.0
+        r.save_output({"id": "1", "title": "Baseline"}, [], gains1, path=p1)
+
+        prev_filters, base, origin = r.load_previous_output(p1)
+        assert origin == {"id": "1", "title": "Baseline"}
+
+        p2 = Path(d) / "round2.json"
+        gains2 = dict(gains1)
+        gains2[1000] = -2.5      # 0.5 dB residual den här mätningen
+        gains2[63] = 1.0         # nytt band rört
+        r.save_output({"id": "2", "title": "Nr2"}, prev_filters, gains2, path=p2,
+                      origin_measurement=origin, previous_band_gains=base)
+
+        data = json.loads(p2.read_text(encoding="utf-8"))
+        # ursprungsmätningen (varv 1) bevarad, INTE skriven över av den nya mätningen
+        assert data["origin_measurement"] == {"id": "1", "title": "Baseline"}
+        assert data["measurement"] == {"id": "2", "title": "Nr2"}
+        diff = data["diff_from_previous_db"]
+        assert diff["1000"] == -0.5, diff["1000"]
+        assert diff["63"] == 1.0, diff["63"]
+        assert diff["20"] == 0.0, diff["20"]
+
+        # kedjan fortsätter: nästa refine ska fortfarande hitta varv 1:s origin
+        _, _, origin2 = r.load_previous_output(p2)
+        assert origin2 == {"id": "1", "title": "Baseline"}
 
 
 def test_coerce_types():

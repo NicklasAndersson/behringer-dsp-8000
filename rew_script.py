@@ -34,6 +34,13 @@ så läggs residualen (target - uppmätt) ovanpå förra JSON:ens bandvärden.
 Det är så man konvergerar en grafisk EQ - grannband läcker in i varandra,
 så första varvets (target - respons) överkorrigerar alltid lite.
 
+--refine behöver BARA den nya mätningen (gjord med EQ:n på) + förra
+förslagsfilen (--refine-from) - inte den ursprungliga mätningen. Den
+ursprungliga mätningens identitet bevaras ändå automatiskt genom hela
+--refine-kedjan (origin_measurement i JSON:en, för spårbarhet), och varje
+körning skriver en diff_from_previous_db som visar exakt hur mycket den
+nya mätningen ändrade varje band jämfört med förra varvet.
+
 Beroenden:
     pip install requests
 """
@@ -300,26 +307,47 @@ def graphic_band_gains(measurement_id, after_peq, base=None):
 
 
 def load_previous_output(path=OUTPUT_FILE):
-    """Förra varvets JSON -> (peq_filters, {frekvens: dB}) för --refine."""
+    """Förra varvets JSON -> (peq_filters, {frekvens: dB}, origin_measurement)
+    för --refine. origin_measurement är mätningen från VARV 1 - den bevaras
+    genom hela --refine-kedjan (se save_output) i stället för att skrivas
+    över av varje ny mätning. Filer från innan detta fanns saknar fältet;
+    då faller vi tillbaka på "measurement" (bättre än inget)."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         raise SystemExit(f"--refine kräver ett tidigare {path} (kör utan --refine först).")
     gains = data.get("graphic_band_gains_db", {})
+    origin = data.get("origin_measurement") or data.get("measurement")
     return (data.get("peq_filters", []),
-            {f: float(gains[str(f)]) for f in dsp8000.ISO_BANDS if str(f) in gains})
+            {f: float(gains[str(f)]) for f in dsp8000.ISO_BANDS if str(f) in gains},
+            origin)
 
 
-def save_output(measurement, filters, band_gains, path=OUTPUT_FILE):
+def save_output(measurement, filters, band_gains, path=OUTPUT_FILE,
+                 origin_measurement=None, previous_band_gains=None):
+    """origin_measurement: mätningen från VARV 1 i en --refine-kedja (annars
+    samma som measurement) - så den inte tappas bort när nästa refine sparar
+    över "measurement" med den NYA mätningen.
+
+    previous_band_gains: förra varvets bandvärden, om det här är en refine.
+    Sparas då som diff_from_previous_db: hur mycket DEN HÄR mätningen ändrade
+    varje band jämfört med förra varvet."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)   # t.ex. history/suggestions/
+    payload = {
+        "generated_at": datetime.now().isoformat(),
+        "measurement": measurement,
+        "origin_measurement": origin_measurement or measurement,
+        "peq_filters": filters,
+        "graphic_band_gains_db": band_gains,
+    }
+    if previous_band_gains is not None:
+        payload["diff_from_previous_db"] = {
+            f: round(band_gains.get(f, 0.0) - previous_band_gains.get(f, 0.0), 3)
+            for f in dsp8000.ISO_BANDS
+        }
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({
-            "generated_at": datetime.now().isoformat(),
-            "measurement": measurement,
-            "peq_filters": filters,
-            "graphic_band_gains_db": band_gains,
-        }, f, indent=2, ensure_ascii=False)
+        json.dump(payload, f, indent=2, ensure_ascii=False)
     print(f"Skrev {len(filters)} PEQ-filter + {len(band_gains)} band till {path}")
 
 
@@ -398,17 +426,31 @@ def main():
     if args.refine:
         # Enhetens EQ (grafisk + ev. PEQ) sitter redan i mätningen: räkna
         # residualen mot rå respons och lägg den ovanpå förra bandvärdena.
+        # Ursprungsmätningen (varv 1) behövs INTE här - bara den NYA
+        # mätningen (measurement, vald ovan) och förra varvets bandvärden
+        # (base, ur src). origin bevaras bara som spårbarhet i JSON:en.
         src = args.refine_from or args.output
-        prev_filters, base = load_previous_output(src)
+        prev_filters, base, origin = load_previous_output(src)
         print(f"Refine: utgår från {len(base)} band + {len(prev_filters)} PEQ i {src}"
+              + (f" (ursprungsmätning {origin.get('id')}: {origin.get('title', '?')})"
+                 if origin else "")
               + (f", skriver {args.output}." if args.output != src else "."))
         api_post(f"/measurements/{measurement_id}/equaliser",
                  {"manufacturer": "Generic", "model": "Generic"})
         set_target_settings(measurement_id, target_overrides)
         eq_command(measurement_id, "Calculate target level")
-        save_output(measurement, prev_filters,
-                    graphic_band_gains(measurement_id, after_peq=False, base=base),
-                    path=args.output)
+        new_gains = graphic_band_gains(measurement_id, after_peq=False, base=base)
+        save_output(measurement, prev_filters, new_gains, path=args.output,
+                    origin_measurement=origin, previous_band_gains=base)
+        changed = {f: d for f, d in
+                   {f: round(new_gains.get(f, 0.0) - base.get(f, 0.0), 3)
+                    for f in dsp8000.ISO_BANDS}.items() if abs(d) >= 0.05}
+        if changed:
+            biggest = sorted(changed.items(), key=lambda kv: -abs(kv[1]))[:5]
+            print("Största ändringarna mot förra varvet (Hz: dB): "
+                  + ", ".join(f"{f}: {d:+.1f}" for f, d in biggest))
+        else:
+            print("Inga band ändrade ≥0,05 dB mot förra varvet.")
         return
 
     if args.yes or input("Kör Match target via API nu? (j/n): ").strip().lower().startswith("j"):

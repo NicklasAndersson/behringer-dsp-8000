@@ -128,6 +128,19 @@ Mät om *med* EQ:n aktiv, välj den nya mätningen, kör `./run.sh refine`
 och skrivs `--output`). Residualen (target − uppmätt) adderas ovanpå
 bandvärdena; PEQ-listan följer med oförändrad.
 
+`--refine` behöver bara **två** saker: den nya mätningen (`--measurement`,
+gjord med EQ:n på) och förra förslagsfilen (`--refine-from`) - EQ-inställningarna
+som satt på enheten när den nya mätningen gjordes ligger redan i den filens
+`graphic_band_gains_db`. Den *ursprungliga* mätningen (varv 1) behövs inte
+igen - men dess identitet tappas inte heller bort: den sparas som
+`origin_measurement` i varje ny förslagsfil och följer med genom hela
+refine-kedjan (i stället för att skrivas över av `measurement`, som alltid är
+mätningen från den senaste körningen). Varje refine-körning skriver också
+`diff_from_previous_db`: hur mycket just den mätningen ändrade varje band
+jämfört med förra varvet - "hur mycket mätning 2 ändrade EQ:n". `show_config.py`
+visar båda som en extra kolumn/rad; kontrollpanelen visar dem under
+förslagsväljaren när ett förslag laddas.
+
 Grannband i en 1/3-oktavs-EQ läcker in i varandra, så första varvet
 överkorrigerar alltid lite – ett eller två refine-varv är hur man konvergerar.
 
