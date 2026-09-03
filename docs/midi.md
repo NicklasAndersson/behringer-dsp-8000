@@ -462,6 +462,12 @@ Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
   20 kHz (3 dekader à 2560). Vår skrivning blev därmed rätt frekvens ändå
   (vi skrev de 11 höga bitarna, dvs. samma värde × 4) men fel bandbredd vid
   *läsning* av enhetsskrivna poster.
+- **Läget ligger inte i dumpen – verifierat åt båda hållen.** Först PEQ av →
+  på för hand (noll byte skiljde), sedan alla sex filtren från ON/SGL → **OFF**
+  (`history/reads/read-20260903-111815.syx` vs `…-112416.syx`): **byte-identiska**.
+  Varken läge eller på/av lagras, och ett avslaget filter behåller sina värden
+  i minnet. Med destroyern av står värdena dessutom stilla mellan avläsningar –
+  de vandrade bara medan den var ON.
 - **PEQ-frekvensen är ISO-band + finsteg, inte ett logaritmiskt tal**
   (`history/reads/read-20260903-111815.syx`, sparad som referensdump): L1 sattes
   för hand till exakt 1 kHz och gav `0x1100` = band 17, finsteg 0. Alla
