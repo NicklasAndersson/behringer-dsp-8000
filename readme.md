@@ -15,6 +15,7 @@ vad som fungerar, hur, och vad som fortfarande är okänt.
 |---|---|
 | **[Vad som fungerar](#vad-som-fungerar)** | CC-skalan, SysEx-dumpen, dump-layouten – kort version |
 | **[Vad vi inte vet](#vad-vi-inte-vet)** | öppna frågor och kvarvarande arbete |
+| **[Checklista](#checklista-verifiera-på-hårdvara)** | allt som bara enheten kan svara på, inklusive Gemini-rapportens påståenden |
 | **[docs/midi.md](docs/midi.md)** | full MIDI-referens: inställningar, byte för byte, testlogg, källor |
 | **[docs/verktyg.md](docs/verktyg.md)** | skripten, kontrollpanelen, hur man kör dem |
 | **[docs/rew.md](docs/rew.md)** | REW-flödet: mätning, målkurva, Match Target, API |
@@ -201,7 +202,9 @@ Protokoll, hårdvarutest och exakt patchningsformat:
 
 Det här är vad som återstår. Var och en är körbar med verktygen i repot –
 `probe --manual`, `grab`, `syx_tools.py diff` – och de flesta kräver bara ett
-knapptryck på enheten och två dumpar.
+knapptryck på enheten och två dumpar. Det som kräver enheten står också som
+bockbar lista i [checklistan](#checklista-verifiera-på-hårdvara) nedan,
+tillsammans med det Gemini-rapporten påstår men inte kan belägga.
 
 ### Dumpen: ~95 % av minnet är okartlagt
 
@@ -269,13 +272,96 @@ knapptryck på enheten och två dumpar.
 
 ### Övrigt värt att prova
 
-- **EQ-Design / UltraCurve Design** (Behringers gamla Windows 9x-editor, ej
-  längre nedladdningsbar). Givet att DSP8000 bara kan dumpa allt talar den
-  troligen samma `4F`-dump fram och tillbaka. Skulle bekräfta RCV-vägen och
-  eventuellt avslöja fler fält.
+- **EQ-Design 1.0** (Behringers Windows 95/NT-editor) **finns på archive.org**:
+  [archive.org/details/eqdes](https://archive.org/details/eqdes), `EQDESIGN.EXE`
+  846 kB daterad 1996-12-09, kräver DSP8000 OS ≥ 2.0 och ett
+  MPU-401-kompatibelt interface. Arkivets beskrivning säger att den styr
+  delay, gate och limiter och gör "MIDI dump requests and user memory
+  updates". Kör den i en Windows 98/XP-VM med USB-MIDI genomkopplat och
+  sniffa trafiken: pratar den bara `4F`-dumpar fram och tillbaka, eller finns
+  kommandon vi inte hittat? Dess delay/gate/limiter-reglage ger de bitfälten
+  gratis. Mer i [docs/midi.md bilaga B](docs/midi.md#bilaga-b-os-versioner-modellskillnader-pc-mjukvara).
 - **Bandvärdena bygger på en enpunktsmätning** och räknas band för band utan
   modell av hur 1/3-oktavsfiltren överlappar. Mät på fler positioner och
   medelvärdesbilda i REW – och kör `refine`-varvet.
+
+---
+
+## Checklista: verifiera på hårdvara
+
+Allt som bara enheten kan svara på, på ett ställe. Punkter märkta **[G]**
+kommer ur [Gemini-rapporten](docs/gemini-report.md) (2026-09-03), som är
+skriven utan vår enhet och blandar DSP8000 med DSP8024/DEQ2496 – inget av det
+räknas som känt förrän det är bockat här. Resten är de öppna frågorna ovan i
+körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlogg).
+
+**Bara ögonen och ett påslag**
+
+- [ ] **OS-versionen.** Visas kort i displayen vid påslag och är aldrig
+  antecknad. **[G]**: 2.0C är sista versionen; EQ-Design kräver ≥ 2.0. Skriv
+  in den i [docs/midi.md bilaga B](docs/midi.md#bilaga-b-os-versioner-modellskillnader-pc-mjukvara).
+- [ ] **MIC INPUT: fram [G] eller bak (readme)?** Och är +15 V-fantomen
+  brytbar?
+- [ ] **Omvandlare 20 eller 24 bit?** Frontpanelens tryck / manualens
+  spec-sida. readme säger 20, **[G]** 24-bit sigma-delta (ser ut som
+  DSP8024-spec).
+- [ ] **Samplingsfrekvens.** GLOBAL SETUP → INPUT: finns 44,1/48 kHz
+  ([docs/midi.md 2](docs/midi.md#2-midi-setup-sidan)) eller är den fast 44,1
+  **[G]**? Avgör om rew.md:s "48 kHz" stämmer.
+- [ ] **Finns DELAY och crossfade i menyerna?** DELAY 8000 är tillval; **[G]**
+  nämner programmerbar crossfade-tid vid programbyte (ADRStudio `23`, 0–15 s
+  på DSP8024). Finns den: `probe --manual` för att se om den ligger i dumpen.
+- [ ] **Programnamn. [G]**: 100 minnen med alfanumeriska namn. Går det att
+  döpa? Då: döp ett program unikt, spara, `grab`, sök mönstret – snabbaste
+  vägen till programblocken ([docs/midi.md 6.7](docs/midi.md#67-kartlägga-fler-fält)).
+
+**En signal och öronen**
+
+- [ ] **Fail-safe-relä. [G]**: vid strömbortfall kopplar reläer in → ut
+  direkt. Musik genom enheten, dra nätsladden: går ljudet igenom?
+- [ ] **Mutar en dump ljudet? [G]**: "ljudfunktionerna inaktiveras
+  temporärt" under en minnesdump. Musik genom enheten, `./run.sh grab x.syx`:
+  tystnar det i ~5 s? Samma vid RCV MEMORY DUMP. Avgör om `apply` kan köras
+  mitt i lyssning.
+
+**MIDI**
+
+- [ ] **Svarar enheten från RTA-skärmen? [G]** (och ADRStudio för DSP8024):
+  SysEx tas emot på EQ- *och* RTA-skärmen, inte i SETUP, LEVEL METER, FB-D,
+  PEQ. Bara EQ-skärmen är testad. `./run.sh grab` från varje skärm.
+- [ ] **Device-ID = MIDI-kanal? [G]**. Vi skickar alltid `00` med CHANNEL 1.
+  Sätt CHANNEL 2, skicka `70 01` med dev `00`, `01` och `7F` (`_send_sysex`
+  i `rew_to_dsp8000.py`): vilka besvaras?
+- [ ] **CC utanför 0–63. [G]**: master, bypass och limiter kan styras via CC.
+  Med CNTL RCV 0 är CC 64–127 lediga: skicka dem ett i taget med displayen i
+  ögonvrån. Bypass via MIDI vore guld för REW-mätningen.
+- [ ] **CNTL SND-talet:** SND = 1, rör 1 kHz-fadern, `monitor` ska visa CC
+  18/50 (inte 17/49).
+- [ ] **PROG SND:** byt program på fronten, syns Program Change i `monitor`?
+- [ ] **PROTECT MEM ON:** blockeras RCV MEMORY DUMP? (`roundtrip` med skyddet på.)
+- [ ] **Programminne kontra arbetsbuffert:** spara ett känt program, `roundtrip
+  --keep`, byt till programmet och tillbaka – vad står kvar? Syns pushen
+  direkt på displayen?
+- [ ] **`apply` med allt rättat** (punkten "Nästa hårdvarutest" ovan): FB-D
+  OFF ×6 → `apply` → PEQ-sidan visar kurvans frekvenser → LED grön →
+  REW-sweep visar att OFF-filtren bearbetar ljudet.
+- [ ] **PEQ-gain på udda åttondel** (−9,75 dB, FB-D OFF): vad visar displayen,
+  och hörs/mäts −9,75 eller −10?
+
+**Locket av** (gör det vid batteribytet – backup först)
+
+- [ ] **Batteriet. [G]**: CR2032-typ, ~5 år, minnet korrumperas under ~2,6 V
+  och är helt borta när batteriet är ur. Mät spänningen, anteckna typ och om
+  det sitter i hållare eller är lött.
+- [ ] **Backup → byte → återställning** är det skarpa RCV-testet:
+  `./run.sh grab dumps/backup-<datum>.syx` före, factory reset **[G]** vid
+  påslag efteråt (knappkombinationen finns inte i rapporten – leta i
+  manualen V1.3 *innan*), sedan RCV MEMORY DUMP (+) och `./run.sh push`.
+  Kommer de 100 programmen tillbaka?
+- [ ] **EPROM-etiketten** (OS-version) och om den är socklad **[G]**.
+- [ ] **Kretskortet:** revision, tomma socklar (delay-minne **[G]**),
+  AES-expansionsplats, nätdel (linjär med trafo **[G]** – kolla
+  glättningskondensatorerna).
 
 ---
 
@@ -322,6 +408,22 @@ rumskorrigering: **OFF på alla sex innan en `apply`**, annars skriver
 destroyern över frekvenserna (2026-09-03 blev 53/74/166 Hz till 16–20 kHz på
 tolv minuter).
 
+### Underhåll
+
+Ur [Gemini-rapporten](docs/gemini-report.md), inte verifierat på vår enhet
+(checklistan ovan):
+
+- **Batteriet** (CR2032-typ, ~5 år) håller de 100 programmen vid liv. Symptom
+  på slut: slumptecken i displayen, krascher vid start, förlorade kurvor.
+  Ordning vid byte: `./run.sh grab dumps/backup-<datum>.syx` → byt → factory
+  reset vid påslag → RCV MEMORY DUMP (+) → `./run.sh push dumps/backup-<datum>.syx`.
+  Dumpen är hela minnet, även det vi inte tolkar, så den duger som backup –
+  om de 100 programmen följer med är dock obekräftat.
+- **Pulsgivaren** slits: hoppande värden vid vridning. Kontaktspray hjälper
+  tillfälligt, byte är fixen.
+- **Nätdelen** är linjär (trafo + regulatorer): 100 Hz-brum = kolla
+  elektrolyterna.
+
 ---
 
 ## Repot
@@ -344,5 +446,6 @@ EQ-förslag → enheten:
 | [docs/midi_captures.txt](docs/midi_captures.txt) | rå labblogg från captures (historik; senare poster rättar tidigare) |
 | `dumps/*.syx` | referensdumpar från enheten med känt innehåll |
 | `docs/keiths-blog-…html` | sparad blogg om DSP8024 (Auto-Q, firmware via EPROM) |
+| [docs/gemini-report.md](docs/gemini-report.md) | Gemini-genererad rapport om DSP8000 (2026-09-03); inleds med vad i den som strider mot våra fynd |
 
 Källor (manualer, ADRStudio, forum) längst ned i [docs/midi.md](docs/midi.md#källor).

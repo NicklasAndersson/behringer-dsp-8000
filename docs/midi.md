@@ -242,6 +242,10 @@ F0 00 20 32 <dev> <model> <cmd …> F7
 (broadcast). `model` = **`01` = DSP8000**. `0E` (DSP8024, som ADRStudio
 använder) ignoreras helt av vår enhet.
 
+`dev`: vi har bara använt `00`, med CHANNEL 1 på enheten. Gemini-rapporten
+hävdar att device-ID följer MIDI-kanalen (CHANNEL 2 ⇒ `01`); otestat,
+readme:s checklista.
+
 ### 6.2 Förfrågan → dump
 
 ```
@@ -252,6 +256,13 @@ Oavsett `xx` (`01`, `10 1F`, `64` – allt testat) svarar enheten efter ~5 s
 med **hela minnesdumpen**. Det finns ingen granulär läsning och ingen
 versionssträng. Enheten måste stå på EQ-huvudskärmen. Förfrågan ändrar inget.
 Det här är vad `grab_dump()` i `rew_to_dsp8000.py` skickar.
+
+Gemini-rapporten (och ADRStudio, för DSP8024) säger att SysEx tas emot på
+EQ- **och** RTA-skärmen men ignoreras i SETUP, LEVEL METER, FB-D och PEQ, och
+att inget kommando kan ta enheten tillbaka till huvudskärmen. Det stämmer
+med att enheten inte svarar från RCV-panelen efter en push; RTA-skärmen är
+otestad. Rapporten hävdar också att ljudet mutas medan en dump skickas –
+otestat (readme:s checklista).
 
 ### 6.3 Minnesdumpen
 
@@ -426,7 +437,11 @@ sätt därför alltid ett negativt provvärde, inte bara ett positivt.
 
 Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
 0–12 och mönstret vid data 39/199) och **programplatserna** (byt program på
-enheten, diffa). PEQ-läget är avgjort: det ligger inte i dumpen alls.
+enheten, diffa). Har programmen namn (Gemini-rapporten säger "alfanumerisk
+namngivning", ADRStudio har `3C` = 12 tecken på DSP8024): döp ett program
+till något unikt, spara, `grab`, och sök mönstret – både rått och i den
+uppackade bitströmmen – så faller programblockets storlek och läge ut direkt.
+PEQ-läget är avgjort: det ligger inte i dumpen alls.
 
 ---
 
@@ -660,16 +675,34 @@ Notera de **tre olika GEQ-skalorna**: CC 0–127 (mitt 64), ADRStudio `10h`
 | Granulär realtids-SysEx | – | bara DSP8024 |
 | PC-editor | – | EQ-Design (DSP8000 OS ≥ 2.0 / DSP8024 OS ≥ 1.1) |
 
-OS-versionen visas kort i displayen vid påslag. Firmware byttes via EPROM.
+OS-versionen visas kort i displayen vid påslag – **testenhetens version är
+inte antecknad** (readme:s checklista). Firmware byttes via EPROM (socklad
+DIP). Sista versionen är enligt EPROM-säljarna **2.0C**
+([monotanz](https://monotanz.de/product/behringer-dsp-8000-version-2-0-c-upgrade-firmware-upgrade-eprom-os-for-dsp8000-download/),
+[reverb](https://reverb.com/uk/item/30262743-behringer-dsp8000-version-2-0c-update-firmware-upgrade-eprom));
+säljtexten tillskriver 2.0C bättre RTA-beräkning, global styrning av
+gate/limiter, optimerad SysEx och stabilare minnesdumpar. Forumuppgift via
+Gemini-rapporten ([audiofanzine](https://fr.audiofanzine.com/eq-graphique/behringer/ultra-curve-dsp8000/forums/t.297918,behringer-dsp8000-eq-design-logiciel.html)):
+en tidig hårdvarurevision ska ha saknat MIDI-bestyckning och socklar för
+delay-minne. 1996-manualen dokumenterar dock MIDI IN, så det gäller i så fall
+bara de allra första exemplaren.
 
 **Implementation chart** (DSP8024-manualen Tab 7.1, antas gälla vår enhet):
 Control Change O/O, Program Change 0–99 O/O, System Exclusive O/O, allt annat
 (noter, pitch bend, system common/realtime) X/X. Mode 1–4 (OMNI on/off).
 
-**EQ-Design / UltraCurve Design** (Windows 9x, gratis, ej längre på
-behringer.com, ej testad här): pratar SysEx med enheten. Givet att DSP8000
-bara kan dumpa allt talar den troligen `4F`-dump fram och tillbaka – vilket
-i så fall är ett bevis på att RCV-vägen (avsnitt 4) finns.
+**EQ-Design 1.0** (Behringer, daterad 1996-12-09) **finns på archive.org**:
+[archive.org/details/eqdes](https://archive.org/details/eqdes), `eqdes.zip` →
+`EQDESIGN.EXE` (846 kB), kontrollerat 2026-09-03. Enligt arkivets beskrivning
+"a real 32-bit application" för Windows 95/NT som kräver DSP8000 OS ≥ 2.0 och
+ett MPU-401-kompatibelt MIDI-interface; styr EQ, delay, noise gate och
+limiter, har "Program/Control Change or SYSEX MIDI control modes" samt "MIDI
+dump requests and user memory updates". Ej testad här. Givet att DSP8000
+bara kan dumpa allt talar den troligen `4F`-dump fram och tillbaka – men att
+den styr delay/gate/limiter betyder att den antingen patchar dumpen precis
+som `apply`, eller känner till kommandon vi inte hittat. Att sniffa dess
+MIDI-trafik (Windows 98/XP i en VM med USB-MIDI genomkopplat, `monitor` på
+en andra port) är den snabbaste vägen till de okartlagda bitfälten.
 
 **ADRStudio StudioWare-panel** för Cakewalk/Sonar: DSP8024-only, SysEx.
 
@@ -696,5 +729,14 @@ i så fall är ett bevis på att RCV-vägen (avsnitt 4) finns.
 - **Keith Neufeld's Electronics Blog** – DSP8024-installation + firmware 1.1→1.3
   via EPROM; sparad Wayback-kopia: `keiths-blog-dsp8024-firmware-upgrade.html`.
   Gäller DSP8024, inte DSP8000.
+- **EQ-Design 1.0** – [archive.org/details/eqdes](https://archive.org/details/eqdes)
+  (`EQDESIGN.EXE`, 846 kB, 1996-12-09). Behringers Windows 95/NT-editor, bilaga B.
+- **Firmware 2.0C** – EPROM-säljare [monotanz.de](https://monotanz.de/product/behringer-dsp-8000-version-2-0-c-upgrade-firmware-upgrade-eprom-os-for-dsp8000-download/),
+  [reverb.com](https://reverb.com/uk/item/30262743-behringer-dsp8000-version-2-0c-update-firmware-upgrade-eprom).
+- Audiofanzine (franska): [EQ-Design-tråd](https://fr.audiofanzine.com/eq-graphique/behringer/ultra-curve-dsp8000/forums/t.297918,behringer-dsp8000-eq-design-logiciel.html),
+  [win editor-tråd](https://fr.audiofanzine.com/eq-graphique/behringer/ultra-curve-dsp8000/forums/t.183432,ultracurve-dsp-8000-et-dsp-8024-win-editor.html)
+  (hårdvarurevisioner, batteri, EQ-Design-krav).
+- [gemini-report.md](gemini-report.md) – Gemini-genererad rapport (2026-09-03);
+  inleds med en tabell över vad i den som strider mot våra fynd.
 - `midi_captures.txt` – rå labblogg med de ursprungliga captures (senare
   poster rättar tidigare).
