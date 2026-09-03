@@ -453,12 +453,12 @@ device-ID = inkanalen.
 | `40` | → DSP | – | begär minnesdumpen ("Read DSP8000 Data?") | **verifierat 2026-09-03**: samma 12112-bytesdump som `70 xx` |
 | `4F` | båda | 12104 packade byte | hela minnesbilden (nedan). → DSP: "Update DSP8000", efter rutan "Select MEMORY DUMP RECEIVE on DSP8000" | **verifierat** (`grab`/`push`, avsnitt 4) |
 | `21` | båda | `<prog>` + 32 L + 32 R | grafisk EQ opackad: `dB·2 + 32` (0–64, 32 = 0 dB), band 0–30 + master per kanal | **verifierat 2026-09-03** → DSP: 1 kHz +8 dB landade direkt, utan knapptryck och utan svar. Samma sak som CC-vägen, men alla 64 värden atomärt i ett meddelande |
-| `22` | båda | `00` + 32 packade (24 byte = 6 PEQ-poster + 4 fyll) | de sex parametriska filtren i arbetsbufferten | otestat → DSP: **granulär PEQ-skrivning** |
+| `22` | båda | `00` + 32 packade (24 byte = 6 PEQ-poster + 4 fyll) | de sex parametriska filtren i arbetsbufferten | **verifierat 2026-09-03** → DSP: L1 = 100 Hz / 1 okt / −6 dB syntes på PEQ-sidan direkt, utan knapptryck – **granulär PEQ-skrivning finns** |
 | `20` | båda | `00` + 16 packade (14 byte = huvud 10 + delay L/R) | limiter, gate, crossfade, shelving, program, delay | otestat |
 | `23` | båda | `<prog>` + 120 packade (104 byte) | ett helt program 1–100 | otestat |
 | `15` | → DSP | 1 byte flaggor | RTA-styrning: bit 0–3 = fyra RTA-inställningar (auto gain, detektor, max display, 1/0,5 dB – ordningen okänd), bit 4 = engångspuls. Skickas efter varje `11` ⇒ RTA-strömmen | otestat |
 | `11` | DSP → | 1 byte + 80 packade (70 byte) | RTA-ram: 64 bandvärden + statusbyte (nivå/gain i 4 dB-steg) | otestat |
-| `41` / `42` | båda | – | läge EQ / RTA (menyn Mode; enheten skickar samma vid byte på fronten) | `41` skickat 2026-09-03: inget svar (inget väntat), displayen inte kontrollerad; `42` otestat |
+| `41` / `42` | båda | – | läge EQ / RTA (menyn Mode; enheten skickar samma vid byte på fronten) | **verifierat 2026-09-03**: displayen byter skärm, inget svar |
 | `10` | DSP → | 16 packade | okänt – EQ-Design tar emot och ignorerar | – |
 | `33` | DSP → | program + 64 byte | fader-status (6.5) – **okänt för EQ-Design 1.0** | verifierat |
 | `70 xx` | → DSP | – | vår förfrågan – **finns inte i EQ-Design** men ger dumpen | verifierat |
@@ -721,7 +721,14 @@ räknas vid fs = 48 000 Hz.
   vänster = `30` → displayen visade +8 dB, inget svar. Grafisk EQ går alltså
   att skriva via SysEx utan RCV MEMORY DUMP – CC kunde det redan band för band,
   det nya är att kommandofamiljen finns i enheten och att `22` (PEQ) därmed
-  är värt att prova.
+  är värt att prova. **`22 00` + 32 packade byte** (6 poster ur dumpen med L1
+  bytt till 100 Hz / 1,00 okt / −6 dB) → PEQ-sidan visade det direkt; en andra
+  `22` lade tillbaka kurvans 53/74/166 Hz på båda kanalerna, utan de
+  spillbitar i bandbyten som den gamla skrivaren lämnat. **`41` och `42`**
+  byter EQ-/RTA-skärm på displayen. Inget av kommandona besvaras.
+  Obs: både `21` och `22` skickades med `00` som programbyte medan enheten
+  stod på program 10 – arbetsbufferten ändrades; om byten betyder något
+  (skrev vi också i program 1?) är inte kontrollerat.
 
 ---
 

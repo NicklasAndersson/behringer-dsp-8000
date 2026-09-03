@@ -6,8 +6,9 @@ rummet med Room EQ Wizard och skriver korrigeringen till enheten.
 
 1996-manualen säger att DSP8000 inte klarar System Exclusive och att MIDI OUT
 är död. Det gäller inte enheter med nyare OS. Vår enhet dumpar hela sitt minne
-på begäran, tar emot en patchad dump tillbaka och låter sig styras band för
-band via Control Change. Grafisk EQ, de parametriska filtren och dumpens
+på begäran, tar emot en patchad dump tillbaka, låter sig styras band för
+band via Control Change och tar emot grafisk och parametrisk EQ direkt via
+Behringers egna SysEx-kommandon (ur EQ-Design, avkodat 2026-09-03). Grafisk EQ, de parametriska filtren och dumpens
 layout är avkodade och verifierade mot hårdvara. Det här repot dokumenterar
 vad som fungerar, hur, och vad som fortfarande är okänt.
 
@@ -101,7 +102,7 @@ AudioBox USB som MIDI-interface. Full referens och testlogg: [docs/midi.md](docs
 | Avkoda GEQ + PEQ ur dumpen | – | **avkodat och verifierat** |
 | RCV MEMORY DUMP (skriva en dump tillbaka) | dator → DSP | **fungerar med knapptryck** på enheten |
 | Skriva GEQ **och** PEQ via patchad dump | dator → DSP | GEQ **verifierat**; PEQ-**värdena** i dumpen stämmer (SysEx-återläsning bit-exakt), men PEQ-**displayen** visar fel frekvens för post 2–6 (se "Vad vi inte vet") |
-| EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03; `43`→`44` (identifiering), `40` (dump) och `21` (GEQ utan knapptryck) **verifierade** mot enheten, `22` PEQ / `42` RTA / `15` RTA-ström otestade |
+| EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03; `43`→`44` (identifiering), `40` (dump), `21` (GEQ), `22` (PEQ) och `41`/`42` (EQ/RTA) **verifierade** mot enheten – GEQ + PEQ skrivs **utan RCV MEMORY DUMP-knappen**; `15`/`11` RTA-ström, `20`, `23` otestade |
 | CC ut vid fader-rörelse | DSP → dator | sett i capture, ej systematiskt testat |
 | DSP8024:s granulära SysEx (ADRStudio) | – | **dött** på DSP8000 |
 
@@ -183,8 +184,10 @@ bandindex och programnamnets första tecken.
 ### Skriva allt: RCV MEMORY DUMP
 
 Eftersom GEQ- och PEQ-blocken är avkodade går det att ta en färsk dump, patcha
-in nya värden och pusha tillbaka den – enda kända vägen att skriva de
-parametriska filtren.
+in nya värden och pusha tillbaka den. Det var enda vägen att skriva de
+parametriska filtren tills EQ-Design:s `21`/`22` visade sig fungera
+(2026-09-03, [docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03));
+dump-vägen är kvar för allt annat (program 1–100, delay, namn) och som backup.
 
 - **Kräver ett tryck på RCV MEMORY DUMP (+)** precis före sändningen. Utan det
   landar ingenting, trots EXCL RCV ON (verifierat båda vägarna 2026-09-03).
@@ -287,11 +290,11 @@ tillsammans med det Gemini-rapporten påstår men inte kan belägga.
   eller postindexet som spökar. `apply`/`patch_dump` är **inte** ändrade för
   detta – ingen kod är rättad, bara observationen dokumenterad.
 
-- **EQ-Design:s granulära kommandon.** `21` (GEQ, 66 byte opackat) är
-  **verifierat 2026-09-03**: landar utan RCV MEMORY DUMP-knappen, som CC men
-  alla 64 värden i ett meddelande. Kvar: `22` (PEQ, 32 packade byte) som
-  skulle göra `apply` knappfri, och `20` (limiter/gate/crossfade/delay)
-  ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)).
+- **EQ-Design:s granulära kommandon** `21` (GEQ, 66 byte opackat) och `22`
+  (PEQ, 32 packade byte) är **verifierade 2026-09-03**: båda landar direkt,
+  utan RCV MEMORY DUMP-knappen. `apply` kan alltså byggas om till `21` + `22`
+  utan dump-push ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)). Kvar: `20` (limiter/gate/crossfade/delay), och
+  om programbyten i `21`/`22` spelar roll – vi skickade `00` på program 10.
 
 ### MIDI-detaljer
 
@@ -371,10 +374,15 @@ körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlo
 - [ ] **EQ-Design:s övriga kommandon** ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)):
   `raw 42` ska byta till RTA-skärmen och `raw 41` tillbaka (`41` skickades
   utan att displayen kontrollerades); `raw 15 00` ska ge en `11`-RTA-ram;
-  ~~`raw 21 00` + 64 byte ska skriva GEQ utan knapptryck~~ **bekräftat
-  2026-09-03**; `raw 22 00` + 32 packade byte (6 × [band, finsteg, bw, gain]
-  + 4 fyll) ska skriva PEQ – med FB-D OFF på alla sex. Lyckas `22` blir
-  `apply` knappfri.
+  ~~`raw 21 00` + 64 byte ska skriva GEQ utan knapptryck; `raw 22 00` + 32
+  packade byte ska skriva PEQ; `raw 41`/`42` ska byta skärm~~ **alla
+  bekräftade 2026-09-03**. Kvar: `raw 15 00` ska ge en `11`-RTA-ram;
+  `raw 20 00` + 16 packade byte (huvud + delay) och `raw 23 <prog>` + 120
+  packade byte (ett helt program).
+- [ ] **Programbyten i `21`/`22`.** Vi skickade `00` medan enheten stod på
+  program 10 och arbetsbufferten ändrades. Byt till program 1 och se om
+  dess GEQ/PEQ också ändrats (`readback` efter Program Change), och prova
+  `21 09` (= program 10) för att se om den byten ska vara aktuellt program.
 - [ ] **`33`-ramens skala:** 1 kHz till +8 dB på fronten, `monitor` ska visa
   +8.0 (råvärde 48, inte 96).
 - [ ] **CC utanför 0–63. [G]**: master, bypass och limiter kan styras via CC.
