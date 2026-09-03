@@ -101,7 +101,7 @@ AudioBox USB som MIDI-interface. Full referens och testlogg: [docs/midi.md](docs
 | Avkoda GEQ + PEQ ur dumpen | – | **avkodat och verifierat** |
 | RCV MEMORY DUMP (skriva en dump tillbaka) | dator → DSP | **fungerar med knapptryck** på enheten |
 | Skriva GEQ **och** PEQ via patchad dump | dator → DSP | GEQ **verifierat**; PEQ-**värdena** i dumpen stämmer (SysEx-återläsning bit-exakt), men PEQ-**displayen** visar fel frekvens för post 2–6 (se "Vad vi inte vet") |
-| EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03; `43`→`44` (identifiering) och `40` (dump) **verifierade** mot enheten, `21` GEQ / `22` PEQ / `42` RTA / `15` RTA-ström otestade |
+| EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03; `43`→`44` (identifiering), `40` (dump) och `21` (GEQ utan knapptryck) **verifierade** mot enheten, `22` PEQ / `42` RTA / `15` RTA-ström otestade |
 | CC ut vid fader-rörelse | DSP → dator | sett i capture, ej systematiskt testat |
 | DSP8024:s granulära SysEx (ADRStudio) | – | **dött** på DSP8000 |
 
@@ -287,10 +287,10 @@ tillsammans med det Gemini-rapporten påstår men inte kan belägga.
   eller postindexet som spökar. `apply`/`patch_dump` är **inte** ändrade för
   detta – ingen kod är rättad, bara observationen dokumenterad.
 
-- **EQ-Design:s granulära kommandon** `21` (GEQ, 66 byte opackat) och `22`
-  (PEQ, 32 packade byte) skulle ge skrivning **utan RCV MEMORY DUMP-knappen**,
-  och `20` sätter limiter/gate/crossfade/delay. Otestade:
-  `./run.sh raw 21 00 <32 L> <32 R>` med 32 = 0 dB
+- **EQ-Design:s granulära kommandon.** `21` (GEQ, 66 byte opackat) är
+  **verifierat 2026-09-03**: landar utan RCV MEMORY DUMP-knappen, som CC men
+  alla 64 värden i ett meddelande. Kvar: `22` (PEQ, 32 packade byte) som
+  skulle göra `apply` knappfri, och `20` (limiter/gate/crossfade/delay)
   ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)).
 
 ### MIDI-detaljer
@@ -371,9 +371,9 @@ körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlo
 - [ ] **EQ-Design:s övriga kommandon** ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)):
   `raw 42` ska byta till RTA-skärmen och `raw 41` tillbaka (`41` skickades
   utan att displayen kontrollerades); `raw 15 00` ska ge en `11`-RTA-ram;
-  `raw 21 00` + 64 byte (32 = 0 dB, master sist per kanal – skicka enhetens
-  egen master, annars ändras utnivån) ska skriva GEQ **utan knapptryck**;
-  `raw 22 00` + 32 packade byte ska skriva PEQ. Lyckas `21`/`22` blir
+  ~~`raw 21 00` + 64 byte ska skriva GEQ utan knapptryck~~ **bekräftat
+  2026-09-03**; `raw 22 00` + 32 packade byte (6 × [band, finsteg, bw, gain]
+  + 4 fyll) ska skriva PEQ – med FB-D OFF på alla sex. Lyckas `22` blir
   `apply` knappfri.
 - [ ] **`33`-ramens skala:** 1 kHz till +8 dB på fronten, `monitor` ska visa
   +8.0 (råvärde 48, inte 96).

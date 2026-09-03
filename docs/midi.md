@@ -452,7 +452,7 @@ device-ID = inkanalen.
 | `44` | DSP → | 1 byte | svar på `43`: `F0 00 20 32 00 01 44 00 F7` – device-ID `00` = CHANNEL 1, plus en databyte `00` som EQ-Design inte läser. Skickar man `44` själv svarar enheten inte | **verifierat 2026-09-03** |
 | `40` | → DSP | – | begär minnesdumpen ("Read DSP8000 Data?") | **verifierat 2026-09-03**: samma 12112-bytesdump som `70 xx` |
 | `4F` | båda | 12104 packade byte | hela minnesbilden (nedan). → DSP: "Update DSP8000", efter rutan "Select MEMORY DUMP RECEIVE on DSP8000" | **verifierat** (`grab`/`push`, avsnitt 4) |
-| `21` | båda | `<prog>` + 32 L + 32 R | grafisk EQ opackad: `dB·2 + 32` (0–64, 32 = 0 dB), band 0–30 + master per kanal | otestat → DSP: GEQ-skrivning **utan knapptryck** |
+| `21` | båda | `<prog>` + 32 L + 32 R | grafisk EQ opackad: `dB·2 + 32` (0–64, 32 = 0 dB), band 0–30 + master per kanal | **verifierat 2026-09-03** → DSP: 1 kHz +8 dB landade direkt, utan knapptryck och utan svar. Samma sak som CC-vägen, men alla 64 värden atomärt i ett meddelande |
 | `22` | båda | `00` + 32 packade (24 byte = 6 PEQ-poster + 4 fyll) | de sex parametriska filtren i arbetsbufferten | otestat → DSP: **granulär PEQ-skrivning** |
 | `20` | båda | `00` + 16 packade (14 byte = huvud 10 + delay L/R) | limiter, gate, crossfade, shelving, program, delay | otestat |
 | `23` | båda | `<prog>` + 120 packade (104 byte) | ett helt program 1–100 | otestat |
@@ -717,7 +717,11 @@ räknas vid fs = 48 000 Hz.
   samma som `70 xx`. `44` och `41` ger inget svar – väntat, `44` är ett svar
   och `41` ett lägesbyte utan kvittens; om displayen bytte vid `41` är inte
   noterat. Arbetsbuffertens namn läses nu ` UT O Q` – första tecknet har
-  blivit blankt sedan `aUT O Q`.
+  blivit blankt sedan `aUT O Q`. `21 00` + enhetens egna 64 värden med 1 kHz
+  vänster = `30` → displayen visade +8 dB, inget svar. Grafisk EQ går alltså
+  att skriva via SysEx utan RCV MEMORY DUMP – CC kunde det redan band för band,
+  det nya är att kommandofamiljen finns i enheten och att `22` (PEQ) därmed
+  är värt att prova.
 
 ---
 
