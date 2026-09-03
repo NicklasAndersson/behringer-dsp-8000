@@ -515,7 +515,8 @@ def apply(base_path=None, dry_run=False):
         return
 
     print("\nChecklista: båda MIDI-kablarna i, MIDI ON, EXCL RCV + SND ON, "
-          "PROTECT MEM av, enheten på EQ-huvudskärmen.")
+          "PROTECT MEM av, FB-D OFF på alla sex PEQ-filtren (med ON flyttar "
+          "destroyern dem själv), enheten på EQ-huvudskärmen.")
     input("Enter när allt stämmer (Ctrl-C avbryter): ")
     print("Sätt enheten i mottagningsläge: tryck + på RCV MEMORY DUMP "
           "(en push utan knapptryck landade inte, docs/midi.md avsnitt 4).")
@@ -649,7 +650,7 @@ def roundtrip(keep=False, base_path=None):
     if not bad and landed:
         verdict = ("GEQ + PEQ-VÄRDEN via dump: FUNGERAR (enheten läser tillbaka exakt "
                    "det som skrevs). Om PEQ-filtren faktiskt bearbetar ljudet beror på "
-                   "PEQ-läget (PAR/AUT/SGL) som INTE ligger i dumpen - kolla PEQ-sidan "
+                   "FB-D-läget (ON/OFF/SGL) som INTE ligger i dumpen - kolla PEQ-sidan "
                    "på displayen eller kör en REW-sweep (63/250/1k ska synas).")
     elif not bad:
         verdict = ("GEQ + PEQ via dump: OKLART - återläsningen matchar men den "

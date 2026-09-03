@@ -514,8 +514,9 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
     <th>#</th><th>På</th><th>Frekvens (Hz)</th><th>Bandbredd (okt)</th><th>Gain (dB)</th><th>Bas</th>
    </tr></thead><tbody id="peqRows"></tbody></table>
   <p class="muted">Skrivs till <b>både L och R</b> (mätningen är L+R). Dumpen sätter
-   filtrets frekvens/bandbredd/gain, men <b>inte</b> läget PAR/AUT/SGL – kolla PEQ-sidan
-   på enheten efter skrivning och sätt läget där om filtren inte bearbetar ljudet.</p>
+   filtrets frekvens/bandbredd/gain, men <b>inte</b> FB-D-läget (ON/OFF/SGL). Sätt
+   <b>OFF</b> på alla sex filtren på enhetens PEQ-sida <b>före</b> skrivningen – med ON
+   flyttar feedback destroyern filtren själv.</p>
  </div>
 </div>
 
@@ -804,7 +805,7 @@ async function writeDevice() {
   say('patchad → ' + prep.applied + ': ' + prep.changes.join(', '), 'ok');
 
   if (!confirm('Steg 2/3: skicka.\n\n' + prep.applied + '\nÄndringar mot basen: '
-      + prep.changes.join(', ') + '.\n\nTryck + på RCV MEMORY DUMP på enheten NU '
+      + prep.changes.join(', ') + '.\n\nFB-D OFF på alla PEQ-filter? Tryck sedan + på RCV MEMORY DUMP på enheten NU '
       + '(mottagningsläge), klicka sedan OK. En push utan mottagningsläge landar inte.')) {
     return say('avbrutet – inget skickat. Patchad dump: ' + prep.applied + '.', '');
   }
@@ -828,7 +829,7 @@ async function verifyWrite() {
     const d = await jpost('/device/verify');
     if (!d.mismatches.length) {
       say('OK: enheten läser tillbaka exakt det som skrevs (' + (d.applied || 'applied')
-        + '). ' + (d.peq_on ? 'Kolla PEQ-sidan på enheten – läget PAR/AUT/SGL sätts där, inte i dumpen. ' : '')
+        + '). ' + (d.peq_on ? 'FB-D-läget (ON/OFF/SGL) ligger inte i dumpen – står det på ON flyttar destroyern filtren, kolla PEQ-sidan. ' : '')
         + 'Verifiera akustiskt med en REW-sweep. "Läs av enheten" ger en ny bas för nästa varv.', 'ok');
     } else {
       say(d.mismatches.length + ' avvikelser: ' + d.mismatches.slice(0,3).join(' · ')

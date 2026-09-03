@@ -336,6 +336,11 @@ def test_peq_record_layout_against_hardware():
     assert all(20 <= f["freq_hz"] <= 20000 for f in fs), [f["freq_hz"] for f in fs]
     # och inversen träffar samma råvärden
     assert syx_tools.peq_freq_raw(1000) == 0x1100 and syx_tools.peq_freq_raw(20000) == 0x1E00
+    # displayavläsningar utan committad dump: 0x0527 visades som 96,15 Hz, och det
+    # vi skrev som 0x043C skrev enheten om till 0x0527 - samma frekvens, två kodningar
+    assert abs(syx_tools.peq_freq_hz(0x0527) - 96.15) < 0.1, syx_tools.peq_freq_hz(0x0527)
+    assert abs(syx_tools.peq_freq_hz(0x043C) / syx_tools.peq_freq_hz(0x0527) - 1) < 0.005
+    assert syx_tools.peq_freq_raw(30000) == 0x1E00, "över 20 kHz klipps till toppbandet"
 
 
 def test_geq_offset_and_scale_against_hardware():

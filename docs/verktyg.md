@@ -46,7 +46,9 @@ kablarna i, och enhetens MIDI-sida inställd enligt [midi.md avsnitt 2](midi.md#
 2. `./run.sh show` → se vad förslaget faktiskt innehåller
 3. Annan enhet än testenheten? `./run.sh calibrate` en gång: kolla att
    `CC = 64 + dB×4` stämmer och att `dsp8000.CC_OFFSET` = enhetens `CNTL RCV`
-4. `./run.sh apply` → GEQ **och** PEQ skrivs i ett svep genom att patcha
+4. Sätt **FB-D OFF** på alla sex PEQ-filtren (PEQ-sidan på enheten) – med ON
+   flyttar feedback destroyern filtren själv, och läget ligger inte i dumpen.
+   `./run.sh apply` → GEQ **och** PEQ skrivs i ett svep genom att patcha
    enhetens dump och pusha tillbaka. **Tryck + på RCV MEMORY DUMP** när
    skriptet pausar – utan det landar dumpen inte. `apply` läser tillbaka och
    bekräftar. (`--dry-run` visar och sparar den patchade dumpen först.)

@@ -23,8 +23,9 @@ SND MEMORY DUMP / SysEx-svar (`F0 00 20 32 00 01 4F 0A|12 …  F7`):
     1/64 oktav, se peq_freq_hz),
     bandbredd (8 bit, (raw+1)/60 oktav), gain (10-bit tvåkomplement, dB = raw/8).
     Postens sista bit tillhör nästa (okartlagda) block - skriv den inte.
-    Filtrens PÅ/AV och läge (PAR/AUT/SGL) lagras INTE i dumpen (verifierat
-    2026-09-03: slå på PEQ för hand ändrar inte en enda byte).
+    FB-D-läget per filter (ON/OFF/SGL på enheten) lagras INTE i dumpen
+    (verifierat 2026-09-03 åt båda hållen: noll byte skiljer). Med ON flyttar
+    feedback destroyern filtret själv - sätt OFF före en skrivning.
   * Master (index 31 och 63) har samma skala som banden, verifierat 2026-09-03
     (−0,5 dB -> −1, +1 dB -> +2). decode_geq returnerar den rått.
   * Resten (delay, gate, limiter, 100 program) är inte kartlagt.
@@ -95,9 +96,12 @@ def peq_freq_hz(raw):
 
 def peq_freq_raw(freq_hz):
     """Hz -> frekvensfältets 13 bitar. Inversen av peq_freq_hz: närmaste
-    ISO-band under frekvensen + finsteg om 1/64 oktav."""
+    ISO-band under frekvensen + finsteg om 1/64 oktav (blir högst 23, eftersom
+    ISO-banden inte är exakta tersband). Kodningen är inte entydig - enheten
+    själv skrev 0x0527 (63 Hz + 39 steg) för 96 Hz - men alla varianter läses
+    lika av peq_freq_hz. Klipps till enhetens spann 20 Hz-20 kHz."""
     import math
-    f = max(freq_hz, dsp8000.ISO_BANDS[0])
+    f = min(max(freq_hz, dsp8000.ISO_BANDS[0]), dsp8000.ISO_BANDS[-1])
     band = max(i for i, b in enumerate(dsp8000.ISO_BANDS) if b <= f)
     fine = min(255, max(0, round(PEQ_FINE_PER_OCT * math.log2(f / dsp8000.ISO_BANDS[band]))))
     return (band << 8) | fine

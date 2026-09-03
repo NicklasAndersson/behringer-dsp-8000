@@ -26,7 +26,7 @@ USB som MIDI-interface. Det som *inte* är testat står uttryckligen markerat.
 | Fader-rörelse → läsbar GEQ-status (`33 09`) | DSP → dator | **fungerar** |
 | Läsa GEQ + PEQ ur dumpen | – | **avkodat** (`syx_tools.py eq`, `rew_to_dsp8000.py readback`) |
 | RCV MEMORY DUMP (ladda en dump tillbaka) | dator → DSP | **fungerar med knapptryck** – tryck + på RCV MEMORY DUMP precis före sändning; utan det landar inget (2026-09-03). `push` / `apply` / `roundtrip`, avsnitt 4 |
-| Skriva GEQ + PEQ via dump | dator → DSP | **verifierat 2026-09-03** – återläsningen är byte-identisk med det vi skickade. GEQ-blocket låg felkartlagt fram till dess (6.4); master och PEQ-läget skrivs inte alls. Delay/gate/limiter: samma väg, bitfälten inte kartlagda |
+| Skriva GEQ + PEQ via dump | dator → DSP | **verifierat 2026-09-03** – återläsningen är byte-identisk med det vi skickade. GEQ-blocket låg felkartlagt fram till dess (6.4); master och FB-D-läget skrivs inte alls. PEQ-frekvensen kodades fel fram till 11:22 samma dag – en `apply` med rättad kodning återstår (avsnitt 7). Delay/gate/limiter: samma väg, bitfälten inte kartlagda |
 | ADRStudio:s granulära DSP8024-SysEx | – | **dött** på DSP8000 (bilaga A) |
 
 Returvägen kräver **båda** MIDI-kablarna (interface OUT → DSP IN *och*
@@ -122,8 +122,10 @@ avkodade (avsnitt 6.4), så vi kan patcha en dump och pusha tillbaka den (`apply
 
 **Fortfarande inte fastställt:**
 
-1. ~~PEQ-läget~~ **avgjort 2026-09-03:** varken läge eller på/av ligger i dumpen
-   (6.4) – slå på PEQ från fronten efter en dump-skrivning.
+1. ~~PEQ-läget~~ **avgjort 2026-09-03:** FB-D-läget (ON/OFF/SGL) ligger inte i
+   dumpen (6.4). Sätt **OFF** på alla sex *före* skrivningen, annars flyttar
+   destroyern filtren. Att ett OFF-filter bearbetar ljudet är inte verifierat
+   (REW-sweep).
 2. Arbetsbuffert kontra programminne: syns en pushad dump direkt på displayen,
    eller först efter Program Change? (Readback läser arbetsbufferten och den
    stämde, så åtminstone den skrivs.)
@@ -212,9 +214,13 @@ EQ, till skillnad från `send` (CC, bara GEQ):
 
 `apply --dry-run` gör steg 1–3 utan att skriva (med `--base` behövs ingen enhet
 alls). Kodningen är inversen av avkodningen i avsnitt 6.4: GEQ-värde =
-`db_to_cc(dB) − 64`, PEQ `fr/bw/g` enligt formlerna där, allt inskrivet MSB-först
-i den 7-bit-packade strömmen så byten förblir < 128. Master rörs inte (skalan
-inte verifierad).
+`dB × 2` (0,5 dB/enhet – **inte** CC-skalan), PEQ `fr/bw/g` enligt formlerna
+där, allt inskrivet MSB-först i den 7-bit-packade strömmen så byten förblir
+< 128. Master rörs inte – avsiktligt, en rumskorrigering ska inte flytta
+utnivån (skalan är känd, 6.4).
+
+**Före en `apply`: FB-D OFF på alla sex filtren.** Läget ligger inte i dumpen,
+och med ON flyttar destroyern filtren själv (testloggen 2026-09-03).
 
 **Skilj på de två skrivvägarna:** `send` (CC, ett band i taget) och dump-pushen
 (`apply` / `push` / `roundtrip`) är olika mekanismer. CC är inkrementellt men
@@ -323,6 +329,23 @@ Verifierat 2026-09-03: ett filter satt för hand till exakt 1 kHz gav `0x1100`
 avläst som "17/18/19 kHz") och `0x1E00` = 20 kHz. Kontrollpunkt: `0x0527`
 (band 5 = 63 Hz, finsteg 39) visades som 96,150 Hz, modellen ger 96,11.
 
+Den gamla log-modellen (`20·10^(raw/640)` på de 11 höga bitarna) gav 65 Hz för
+`0x0527` och 15,9–16,1 kHz för alla tre destroyer-filtren – det är de
+avläsningarna som fäller den. `0x1100` för 1 kHz fanns redan i
+2026-09-02-capturen med sex handsatta filter (L1 = 1 kHz, 2 okt, −6 dB);
+log-modellen läste det som 1002 Hz och dolde mönstret.
+
+**Kodningen är inte entydig.** Finsteget får överstiga ett tersband: vi skrev
+`0x043C` (band 4 = 50 Hz + 60 steg = 95,8 Hz, avsett som 53 Hz under
+log-modellen) och enheten skrev om samma filter till `0x0527` (63 Hz + 39 steg
+= 96,1 Hz) – samma frekvens, annan uppdelning, och inte heller enhetens är
+kanonisk (80 Hz + 17 vore närmast). Att enhetens omskrivning är samma
+frekvens under modellen (95,8 → 96,1 Hz) men inte under log-modellen (53 →
+65 Hz) är i sig en oberoende bekräftelse. `peq_freq_raw`
+väljer alltid närmaste ISO-band *under* frekvensen (finsteg ≤ 23, eftersom
+ISO-banden inte är exakta tersband) och klipper till 20 Hz–20 kHz;
+`peq_freq_hz` läser alla 256 finsteg.
+
 Frekvens- och bandbreddsbredden är rättade 2026-09-03 (var 11 + 10). Enheten
 skrev själv om posterna medan feedback destroyern var på, och de värdena lästes
 av på displayen samtidigt: med 10-bitars bandbredd blev fyra av sex poster
@@ -341,8 +364,10 @@ filtret själv**, SGL = single shot, OFF = filtret står still och används som
 parametriskt. Verifierat
 2026-09-03: en `apply` skrevs med PEQ avslaget, PEQ slogs sedan på för hand på
 enheten och en ny dump hämtades – **noll byte skiljde**. Dumpen bär filtrens
-*värden*, inte om de är inkopplade. Efter en dump-skrivning måste PEQ alltså
-slås på från fronten.
+*värden*, inte läget. Läget sätts på fronten: **OFF på alla sex före en
+skrivning**, annars flyttar destroyern filtren (avsnitt 7). Om ett filter med
+FB-D OFF bearbetar ljudet som stillastående parametriskt filter är inte
+verifierat – en REW-sweep avgör.
 
 **Gain-fältet är 10 bitar, inte 11** (rättat 2026-09-03). Båda bredderna ger
 samma dB för alla handsatta testvärden (10 bitar med `raw/8` ⇔ 11 bitar med
@@ -372,7 +397,7 @@ men kräver att någon rör en fader – `monitor` skriver ut den i dB.
 | `dsp8000_sysex_p16db.syx` | `4F 12` | alla 62 GEQ-band +16 dB, PEQ OFF | `test_rew_script.py`, `push`-test |
 | `dsp8000_sysex_ondemand.syx` | `4F 0A` | verklig EQ-kurva från REW-körning, PEQ OFF | exempel på förfrågnings-dump |
 | `dsp8000_sysex_edges.syx` | `4F 12` | 20 Hz, 20 kHz och master satta för hand: L −0,5 dB, R +0,5 dB, allt annat 0 | `test_rew_script.py` – låser GEQ-offset + skala mot hårdvaran |
-| `dsp8000_sysex_peq_device.syx` | `4F 12` | enhetens egen PEQ-kodning: L1 satt för hand till exakt 1 kHz, resten flyttade av destroyern, displayen avläst samtidigt | `test_rew_script.py` – låser PEQ-postens fältindelning och frekvenskodningen |
+| `dsp8000_sysex_peq_device.syx` | `4F 04` | enhetens egen PEQ-kodning (= `history/reads/read-20260903-111815.syx`): L1 satt för hand till exakt 1 kHz, resten flyttade av destroyern, displayen avläst samtidigt | `test_rew_script.py` – låser PEQ-postens fältindelning och frekvenskodningen |
 
 (En fjärde fil, `_m16db.syx`, var byte-identisk med `_p16db.syx` – en
 felnamngiven capture – och är borttagen.)
@@ -400,8 +425,8 @@ Ett fält som gränsar till ett annat avslöjar sig när grannen är **negativ**
 sätt därför alltid ett negativt provvärde, inte bara ett positivt.
 
 Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
-0–12 och mönstret vid data 39/199), **PEQ-läget** ON/OFF/SGL, och
-**programplatserna** (byt program på enheten, diffa).
+0–12 och mönstret vid data 39/199) och **programplatserna** (byt program på
+enheten, diffa). PEQ-läget är avgjort: det ligger inte i dumpen alls.
 
 ---
 
@@ -448,20 +473,21 @@ Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
 - **PEQ-läget avgjort** (`history/writes/applied-20260903-104243.syx` skriven med
   PEQ av, `history/reads/read-20260903-104416.syx` läst efter att PEQ slagits på
   för hand): dumparna är **byte-identiska**. Varken på/av eller PAR/AUT/SGL finns
-  i minnesdumpen – bara filtrens värden. PEQ måste alltså kopplas in från fronten
-  efter en dump-skrivning. Samma par visar också att **skrivvägen nu landar exakt**:
+  i minnesdumpen – bara filtrens värden. Läget sätts på fronten (och ska stå på
+  OFF före en skrivning, se nedan). Samma par visar också att **skrivvägen nu landar exakt**:
   12112 byte tillbaka, bit för bit lika det vi skickade, med sund EQ (alla band inom
   ±16 dB på 0,5 dB-rutnätet).
 - **PEQ-postens fältindelning rättad** (`history/writes/applied-20260903-105428.syx`
-  → `history/reads/read-20260903-110621.syx`, sparad som `dumps/dsp8000_sysex_peq_device.syx`):
+  → `history/reads/read-20260903-110621.syx`):
   frekvens är **13 bitar** och bandbredd **8**, inte 11 + 10. Enheten skrev om
   posterna själv medan displayen lästes av, och med den gamla indelningen blev
   fyra av sex bandbredder orimliga (13,4 oktav) medan 8-bitarsfältet ger exakt
   displayens `37/60`, `34/60`, `28/60`. De två frigjorda bitarna hör till
   frekvensen, vilket sätter enhetens eget toppfilter på råvärde 7680 = exakt
-  20 kHz (3 dekader à 2560). Vår skrivning blev därmed rätt frekvens ändå
-  (vi skrev de 11 höga bitarna, dvs. samma värde × 4) men fel bandbredd vid
-  *läsning* av enhetsskrivna poster.
+  20 kHz (då läst som 3 dekader à 2560; i den rättade kodningen nedan är det
+  band 30 × 256). Fältbredden ändrade inte vad vi skrev (de 11 höga bitarna =
+  samma värde × 4), bara läsningen av enhetsskrivna bandbredder – att våra
+  frekvenser ändå var fel beror på kodningen, två punkter ned.
 - **Läget ligger inte i dumpen – verifierat åt båda hållen.** Först PEQ av →
   på för hand (noll byte skiljde), sedan alla sex filtren från ON/SGL → **OFF**
   (`history/reads/read-20260903-111815.syx` vs `…-112416.syx`): **byte-identiska**.
@@ -483,7 +509,15 @@ Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
   poster visade 89 Hz respektive 9,2 kHz). Alla sex filtren stod på **ON** i
   FB-D-kolumnen, dvs. i jaktläge. **Sätt FB-D till OFF på alla sex innan en
   `apply`** (lägena är ON/OFF/SGL), annars skriver enheten över frekvenserna.
-  Kvar att verifiera: att våra frekvenser står kvar när destroyern är av.
+  Samma omskrivning satte gainen på 0,5 dB-steg för de fem filter destroyern
+  flyttade (−9,75 → −10, −10,75 → −11, −11,375 → −11,5); R3 behöll −11,375.
+  Enheten *lagrar* alltså åttondels-dB som vi skriver dem (återläsningen två
+  minuter efter en skrivning var byte-identisk) men arbetar själv i halva dB.
+  **Kvar att verifiera** – dagens sista `apply` gjordes 10:54, frekvenskodningen
+  rättades 11:22, så ingen skrivning med rätt PEQ-frekvenser finns ännu: en
+  `apply` med FB-D OFF på alla sex, PEQ-sidan ska visa kurvans frekvenser och
+  de ska stå kvar, LED grön, och en REW-sweep som visar att OFF-filtren
+  bearbetar ljudet.
 - **Master rörs inte av en skrivning** – bekräftat på riktig data: basen hade master
   −8,5 / −8 dB (enhetens eget läge, bekräftat av användaren) och de värdena står kvar
   efter `apply`. Med den gamla, felskjutna modellen hamnade sista bandets skrivning

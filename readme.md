@@ -98,7 +98,7 @@ AudioBox USB som MIDI-interface. Full referens och testlogg: [docs/midi.md](docs
 | Fader-rörelse → läsbar GEQ-status | DSP → dator | **fungerar** (`33 09`-frame) |
 | Avkoda GEQ + PEQ ur dumpen | – | **avkodat och verifierat** |
 | RCV MEMORY DUMP (skriva en dump tillbaka) | dator → DSP | **fungerar med knapptryck** på enheten |
-| Skriva GEQ **och** PEQ via patchad dump | dator → DSP | **verifierat** (roundtrip 2026-09-03) |
+| Skriva GEQ **och** PEQ via patchad dump | dator → DSP | **verifierat** (roundtrip 2026-09-03); en `apply` med rättad PEQ-frekvens återstår |
 | CC ut vid fader-rörelse | DSP → dator | sett i capture, ej systematiskt testat |
 | DSP8024:s granulära SysEx (ADRStudio) | – | **dött** på DSP8000 |
 
@@ -167,8 +167,13 @@ fram till 2026-09-03; rättelsen och vad felet ställde till med står i
 PEQ-post, 32 bitar: frekvens 13 bitar (**5 bitar ISO-bandindex + 8 bitar
 finsteg om 1/64 oktav**, `f = ISO[raw>>8] · 2^((raw&255)/64)`), bandbredd
 8 bitar (`(raw+1)/60` oktav), gain 10 bitar tvåkomplement (`dB = raw/8`).
-Postens sista bit tillhör nästa block och skrivs inte.
-OFF = posten helt noll. Verifierat mot 6 filter satta för hand på enheten.
+Postens sista bit tillhör nästa block och skrivs inte. Posten helt noll =
+inga värden satta. Verifierat mot handsatta filter (1 kHz = `0x1100`) och
+enhetens egna destroyer-filter avlästa på displayen (96 Hz, 17/18/19/20 kHz).
+Kodningen är inte entydig – finsteget får överstiga ett tersband, och enheten
+skrev själv `0x0527` (63 Hz + 39 steg) för 96 Hz – men alla varianter läses
+lika; vi skriver alltid närmaste band under. FB-D-läget (ON/OFF/SGL) ligger
+inte i dumpen.
 
 ### Skriva allt: RCV MEMORY DUMP
 
@@ -217,10 +222,13 @@ knapptryck på enheten och två dumpar.
 - **12100 = 100 × 121 går jämnt ut**, men mönstret vid data 39 återkommer vid
   199 (delta 160, inte 121). "100 program × 121 byte" är alltså **inte**
   bekräftat.
-- **PEQ-gainets LSB.** Alla testvärden var hela 0,5 dB-steg, så de tre lägsta
-  gain-bitarna var alltid noll. Fältet kan vara 10 bitar (1/8 dB) med bit 278
-  tillhörande nästa fält. Avgörs med ett PEQ-filter på ett udda värde plus en
-  dump tagen med **knappen**.
+- ~~**PEQ-gainets LSB.**~~ **Bredden avgjord 2026-09-03:** 10 bitar à 1/8 dB
+  (bit 278 är satt i orörda dumpar, alltså nästa block). Enheten behåller ett
+  udda åttondels-värde byte-exakt (−9,75 dB lästes tillbaka som −9,75), men
+  när destroyern själv skrev om fem filter landade alla på 0,5 dB-steg
+  (−9,75 → −10, −10,75 → −11, −11,375 → −11,5). **Okänt:** vad displayen visar
+  och DSP:n gör med −9,75. Test: skriv ett filter med udda åttondel, FB-D
+  OFF, läs displayen.
 
 ### Skrivvägen
 
@@ -239,8 +247,16 @@ knapptryck på enheten och två dumpar.
 - ~~**Röd overflow-LED efter en skrivning.**~~ **Förklarad 2026-09-03:** GEQ-blocket
   låg en bit fel i `patch_dump`, så varje sänkning skrevs som en stor höjning
   (−1 dB blev +63 dB, 28 av 62 band över +16 dB). Rättat och låst av ett test
-  mot hårdvarudumpen `dumps/dsp8000_sysex_edges.syx`. **Kvar att verifiera på
-  hårdvara:** att en `apply` nu ger tyst, korrekt EQ och ingen röd LED.
+  mot hårdvarudumpen `dumps/dsp8000_sysex_edges.syx`. Skrivningen efter
+  rättelsen landade bit för bit och gav sund EQ (alla band inom ±16 dB).
+- **Nästa hårdvarutest: en `apply` med allt rättat.** Frekvenskodningen
+  rättades 2026-09-03 kl. 11:22, *efter* dagens sista `apply`, så ingen
+  skrivning med rätt PEQ-frekvenser är gjord ännu. Kör: FB-D **OFF** på alla
+  sex filtren → `apply` → PEQ-sidan ska visa kurvans frekvenser (förra gången
+  stod 96/424/269 Hz där kurvan sa 53/74/166) och de ska stå kvar → IN/OUT-LED
+  grön, inte röd → REW-sweep som visar att filtren bearbetar ljudet med FB-D
+  OFF. Det sista är inte verifierat: OFF *bör* betyda stillastående
+  parametriskt filter, men bara en sweep avgör.
 
 ### MIDI-detaljer
 
@@ -296,10 +312,15 @@ basen. Använd de 3 parametriska filtren för sådana.
 
 Automatisk detektering och dämpning av rundgång, med **samma tre parametriska
 filter** som annars används för rumskorrigering – de konkurrerar om samma
-resurs. **AUT** = filtren letar kontinuerligt efter ny feedback, **SGL** =
-filtret fixeras på hittad frekvens. Fungerar bäst på dynamiskt signalinnehåll
-(tal, sång), inte stationära toner. Primärt för PA/scen, mindre relevant vid
-rumskorrigering hemma.
+resurs. Läget ställs per filter i FB-D-kolumnen på PEQ-sidan och heter på
+testenheten **ON / OFF / SGL** (DSP8024-dokumentationen säger AUT / PAR / SGL):
+**ON** = destroyern letar kontinuerligt och flyttar filtret själv, **SGL** =
+single shot, filtret fixeras på hittad frekvens, **OFF** = filtret står still
+med sina värden. Läget ligger inte i dumpen. Fungerar bäst på dynamiskt
+signalinnehåll (tal, sång), inte stationära toner. Primärt för PA/scen. För
+rumskorrigering: **OFF på alla sex innan en `apply`**, annars skriver
+destroyern över frekvenserna (2026-09-03 blev 53/74/166 Hz till 16–20 kHz på
+tolv minuter).
 
 ---
 
