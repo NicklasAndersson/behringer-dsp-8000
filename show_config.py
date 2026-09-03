@@ -8,16 +8,16 @@ räcker för att bara visa värden.
 
 Beroenden: inga (stdlib).
 """
+import argparse
 import html
 import json
-import sys
 import webbrowser
 from pathlib import Path
 
 import dsp8000
+import paths
 
 JSON_FILE = Path("rew_eq_suggestion.json")
-HTML_FILE = Path("dsp8000_config.html")
 
 
 def bar(db, scale=dsp8000.GRAPHIC_MAX_BOOST_DB):
@@ -107,13 +107,20 @@ def render(data):
 
 
 def main():
-    if not JSON_FILE.exists():
-        raise SystemExit(f"{JSON_FILE} saknas - kör rew_script.py först.")
-    data = json.loads(JSON_FILE.read_text(encoding="utf-8"))
-    HTML_FILE.write_text(render(data), encoding="utf-8")
-    print(f"Skrev {HTML_FILE}")
-    if "--no-open" not in sys.argv:
-        webbrowser.open(HTML_FILE.resolve().as_uri())
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--input", metavar="FIL", default=str(JSON_FILE),
+                    help=f"EQ-förslag att visa (default {JSON_FILE})")
+    ap.add_argument("--no-open", action="store_true", help="öppna inte webbläsaren")
+    args = ap.parse_args()
+    src = Path(args.input)
+    if not src.exists():
+        raise SystemExit(f"{src} saknas - kör rew_script.py först.")
+    data = json.loads(src.read_text(encoding="utf-8"))
+    out = paths.new(paths.CONFIG, f"config-{paths.ts()}.html")
+    out.write_text(render(data), encoding="utf-8")
+    print(f"Skrev {out}")
+    if not args.no_open:
+        webbrowser.open(out.resolve().as_uri())
 
 
 if __name__ == "__main__":

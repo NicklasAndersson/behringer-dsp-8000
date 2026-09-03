@@ -38,15 +38,17 @@ Weitere ist auf Schwedisch.
 |---|---|
 | `readme.md` | den här filen: enheten, REW-arbetsflödet, skripten |
 | `run.sh` | skapar `.venv`, installerar `requirements.txt`, kör valfritt steg (`./run.sh help`) |
-| `run_gui.py` | webb-kontrollpanel (`./run.sh gui`): läs av + redigera GEQ/PEQ, REW-flödet steg för steg, och en kommandopanel för `run.sh` |
-| `rew_script.py` | **steg 1**: REW → `rew_eq_suggestion.json` (PEQ-filter + 31 bandvärden) |
-| `show_config.py` | **steg 1b**: JSON → `dsp8000_config.html`, visar vad som ska ställas in |
-| `rew_to_dsp8000.py` | **steg 2**: skickar banden som MIDI CC, eller `apply` (GEQ+PEQ via dump); `readback`/`probe`/`grab`/`push` |
+| `run_gui.py` | webb-kontrollpanel (`./run.sh gui`): **1.** välj bas-dump (en avläsning eller en `dumps/`-referens) – "Läs av enheten" sparar en ny `history/reads/read-<tid>.syx`; **2.** fyll redigeraren (lodräta GEQ-reglage + PEQ-tabell + live EQ-kurva) från ett valt förslag eller basens egen EQ; **3.** skriv GEQ+PEQ genom att patcha *exakt den valda basen* (→ `history/writes/applied-<tid>.syx`) och pusha, i tre dialogsteg. **Direktredigering**-läge: GEQ-reglagen skickar CC direkt till enheten (ingen dump). Allt tidsstämplas i `history/`, inget val är implicit. Hopfällbart: skapa förslag per mätning + `run.sh`-kommandopanel |
+| `rew_script.py` | **steg 1**: REW → EQ-förslag (PEQ-filter + 31 bandvärden); `--output FIL` styr vart (GUI:t: `history/suggestions/suggestion-<tid>-<mätning>.json`), `--refine-from FIL` för andra varvet |
+| `show_config.py` | **steg 1b**: EQ-förslag → `history/config/config-<tid>.html`, visar vad som ska ställas in (`--input FIL`) |
+| `rew_to_dsp8000.py` | **steg 2**: två skrivvägar – `send` (CC, ett band i taget, bara GEQ) och `apply` (hel dump, GEQ+PEQ); `roundtrip`/`readback`/`probe`/`grab`/`push` |
 | `dsp8000.py` | modell av enheten: ISO-band, gain-gränser, CC-mappning, `db_to_cc` |
 | `syx_tools.py` | avkoda/diffa `.syx`-dumpar (ren stdlib) |
-| `dsp8000_gui.html` | manuell GEQ-kontroll i webbläsaren via Web MIDI, utan REW |
+| `dsp8000_gui.html` | fristående manuell GEQ-kontroll via Web MIDI (Chrome/Edge), utan REW eller servern |
+| `paths.py` | var genererade filer hamnar: `history/{reads,writes,suggestions,captures,config}/` |
 | `test_rew_script.py` | självtester utan REW/enhet (`./run.sh test`) |
-| `rew_eq_suggestion.json` | senaste körningens resultat (exempel på formatet) |
+| `rew_eq_suggestion.json` | exempel på förslagsformatet (GUI-körningar hamnar i `history/`) |
+| `history/` | allt genererat, tidsstämplat och sorterat: `reads/` (avläsningar), `writes/` (patchade/pushade dumpar), `suggestions/` (EQ-förslag), `captures/` (råa monitor/sysex/probe-dumpar), `config/` (show_config-HTML). Gitignorerad |
 | `docs/midi.md` | **MIDI-referensen**: inställningar, CC, SysEx, dump-layout, vad som är testat |
 | `docs/midi_captures.txt` | rå labblogg från captures (historik, senare poster rättar tidigare) |
 | `docs/keiths-blog-…html` | sparad blogg om DSP8024 (Auto-Q, firmware) |
@@ -68,17 +70,39 @@ inte `pip install` globalt (PEP 668), så kör i en virtuell miljö. Enklast:
 ./run.sh target K=V …       # = rew_script.py --target K=V … --yes
 ./run.sh house-curve PATH|--clear
 ./run.sh show               # = show_config.py
-./run.sh send --dry-run     # = rew_to_dsp8000.py send --dry-run
+./run.sh send --dry-run     # = rew_to_dsp8000.py send --dry-run (CC-vägen, bara GEQ)
 ./run.sh readback           # läs GEQ + PEQ ur enheten
+./run.sh roundtrip          # hårdvarutest av dump-vägen: skriv känt GEQ+PEQ-mönster, läs tillbaka, återställ
 ./run.sh test               # självtester, kräver varken REW eller enheten
 ```
 
 `run.sh` skapar `.venv` och installerar beroendena vid behov. `./run.sh gui`
-öppnar en kontrollpanel på `http://127.0.0.1:8765`: läs av enhetens nuläge
-(GEQ + PEQ), redigera båda och skriv tillbaka via dumpen (`apply`), följ
-REW-flödet steg för steg, och kör vilket `run.sh`-kommando som helst i en
-kommandopanel (utskrift strömmas, skriptens frågor besvaras i sidan). Ren
-stdlib, bara localhost. För hand:
+öppnar en kontrollpanel på `http://127.0.0.1:8765`. Tre numrerade val, inget
+implicit:
+
+1. **Bas-dump** – dropdown med dina avläsningar (`history/reads/*.syx`) och
+   `dumps/`-referenserna. *Läs av enheten* sparar en ny `history/reads/read-<tid>.syx`
+   och väljer den. Skrivningen patchar *exakt* den valda filen – aldrig en dump
+   som hämtas i skrivögonblicket (då riskerar man att fånga enheten mitt i ett
+   lägesbyte och pusha tillbaka en trasig bild av master/limiter/gate).
+2. **Fyll redigeraren** – från ett valt förslag (`history/suggestions/*.json` +
+   committade `rew_eq_suggestion*.json`) eller *Basens EQ →*. GEQ:n är 31 lodräta
+   reglage (som `dsp8000_gui.html`); en **EQ-kurva** ovanför visar summan av
+   GEQ+PEQ, var för sig, och den valda basen (streckad), live medan du drar.
+   Raden under redigeraren visar vilken fil den kom från.
+3. **Skriv** i tre steg med paus: (1) patcha basen → `history/writes/applied-<tid>.syx`,
+   (2) tryck + på RCV MEMORY DUMP → skicka, (3) enheten tillbaka på
+   EQ-huvudskärmen → läs tillbaka och jämför (efter en push står enheten på
+   RCV-panelen och svarar inte på läsförfrågan därifrån; *Verifiera skrivningen*
+   kör om steg 3). Nästa varv: *Läs av enheten* igen för en färsk bas.
+
+**Direktredigering** (kryssruta): GEQ-reglagen skickar då ett Control Change
+direkt till enheten per band (samma väg som `send`) – snabb finjustering utan
+dump-cykel. Det ändrar bara enhetens grafiska EQ, *inte* bas-filen, PEQ eller
+master; läs av enheten igen innan en dump-skrivning ovanpå.
+
+Att skapa förslag ur en REW-mätning och hela `run.sh`-kommandopanelen ligger i
+varsin hopfällbar sektion. Ren stdlib, bara localhost. För hand:
 
 ```sh
 python3 -m venv .venv
@@ -107,8 +131,9 @@ båda MIDI-kablarna i, enhetens MIDI-sida inställd enligt `docs/midi.md` avsnit
 3. (Annan enhet än testenheten? `./run.sh calibrate` en gång, kolla att
    `CC = 64 + dB×4` stämmer och att `dsp8000.CC_OFFSET` = enhetens `CNTL RCV`.)
 4. `./run.sh apply` → GEQ **och** PEQ skrivs i ett svep genom att patcha
-   enhetens dump och pusha tillbaka; `apply` läser tillbaka och bekräftar.
-   (`./run.sh apply --dry-run` visar och sparar `dsp8000_applied.syx` först.)
+   enhetens dump och pusha tillbaka. **Tryck + på RCV MEMORY DUMP** när skriptet
+   pausar (utan det landar dumpen inte). `apply` läser tillbaka och bekräftar.
+   (`./run.sh apply --dry-run` visar och sparar `history/writes/applied-*.syx` först.)
    Alternativ, bara grafisk EQ via CC: `./run.sh send --verify`, och ställ då
    de ≤3 parametriska filtren för hand (`show_config.py` visar dem)
 6. Ny sweep med EQ:n **aktiv** (LED tänd) → det akustiska resultatet
@@ -302,6 +327,7 @@ testlogg, vad som återstår).
 Kräver **inte** REW Pro. Du kör själv sweepen i REW. Sedan:
 
 1. välj mätning i listan (eller `--measurement ID`; `--yes` hoppar över frågan)
+   – `--output FIL` styr vart förslaget skrivs
 2. skriptet sätter equaliser → Generic och match target settings
    (`20–300 Hz`, `individualMaxBoost 3 dB`, `overallMaxBoost 0 dB`), kör
    `Calculate target level` + `Match target` via API. **Målkurvans form**
@@ -314,7 +340,10 @@ Kräver **inte** REW Pro. Du kör själv sweepen i REW. Sedan:
 4. beräknar 31 grafiska bandvärden: `(target − respons)` med 1/3-oktavs
    utjämning vid ISO-frekvenserna, centrerat kring median, klippt till
    `SAFE_BOOST_DB` (+3) upp / −16 ner
-5. sparar allt till `rew_eq_suggestion.json`
+5. sparar allt till `--output`-filen (default `rew_eq_suggestion.json`). GUI:t
+   sätter `history/suggestions/suggestion-<tid>-<mätning>.json` så varje körning
+   ligger kvar tidsstämplad och valbar; `--refine` skriver en ny sådan och läser
+   den gamla via `--refine-from FIL` (utan flaggan: läser och skriver `--output`)
 
 **Ingen dubbel-EQ:** med PEQ räknas de grafiska banden mot
 `/eq/frequency-response` (responsen *efter* de 3 filtren). Med `--no-peq`
@@ -324,10 +353,11 @@ Svarar du `n` på "Kör Match target via API nu?" antas du redan ha kört
 matchningen i REW:s GUI.
 
 `--refine` (**andra varvet**): mät om *med* EQ:n aktiv, välj den nya
-mätningen, kör `--refine`. Residualen (target − uppmätt) adderas ovanpå
-bandvärdena i befintlig JSON; PEQ-listan följer med oförändrad. Grannband i en
-1/3-oktavs-EQ läcker in i varandra, så första varvet överkorrigerar alltid
-lite – ett eller två refine-varv är hur man konvergerar.
+mätningen, kör `--refine` (`--refine-from` = förra förslaget, `--output` = det
+nya). Residualen (target − uppmätt) adderas ovanpå bandvärdena; PEQ-listan följer
+med oförändrad. Grannband i en 1/3-oktavs-EQ läcker in i varandra, så första
+varvet överkorrigerar alltid lite – ett eller två refine-varv är hur man
+konvergerar.
 
 **Målkurvan via API:**
 
@@ -347,11 +377,11 @@ level`. Fältnamnen är REW:s egna och kan skilja mellan versioner – kör
 (globalt) – log-interpolation sätts alltid före filen.
 
 ### Steg 1b: `show_config.py`
-Läser `rew_eq_suggestion.json`, skriver `dsp8000_config.html` (gitignorerad)
-och öppnar den: de 31 banden med målförstärkning, stapel ±16 dB, CC-nummer
-och CC-värde, plus de ≤3 parametriska filtren med Q **och** bandbredd i
-oktaver (enheten vill ha oktaver). Ren stdlib. `--no-open` hoppar över
-webbläsaren.
+Läser ett EQ-förslag (`--input FIL`, default `rew_eq_suggestion.json`), skriver
+`history/config/config-<tid>.html` och öppnar den: de 31 banden med
+målförstärkning, stapel ±16 dB, CC-nummer och CC-värde, plus de ≤3 parametriska
+filtren med Q **och** bandbredd i oktaver (enheten vill ha oktaver). Ren stdlib.
+`--no-open` hoppar över webbläsaren.
 
 ### Egen equaliser-modell i REW?
 **Går inte.** REW:s equaliser-lista är inbyggd; API:t kan bara *välja*
@@ -387,14 +417,24 @@ ingen API-väg att tvinga 3 – `rew_script.py` behåller de 3 största själv.
 annat skriptet gör är fritt. Kör sweepen i GUI:t.
 
 ### Steg 2: `rew_to_dsp8000.py`
-Läser `rew_eq_suggestion.json` och skickar de 31 bandvärdena som MIDI CC.
+Läser `rew_eq_suggestion.json` och skriver till enheten. **Två separata
+skrivvägar** (se `docs/midi.md` avsnitt 5b):
+
+- **CC, ett band i taget** (`send`): de 31 grafiska banden som var sitt Control
+  Change. Inkrementellt och snabbt, men bara GEQ, och enheten tappar meddelanden
+  om de kommer i en klump – `send --verify` läser tillbaka och rapporterar.
+- **Hel minnesdump** (`apply`): patchar enhetens dump med GEQ **+ PEQ** och
+  pushar tillbaka i ett svep (RCV MEMORY DUMP). Atomiskt, skriver båda, men
+  skriver över hela minnesbilden. `roundtrip` är hårdvarutestet av den vägen.
+
 Kommandotabell i `docs/midi.md` avsnitt 8; de viktigaste:
 
 | Kommando | Gör |
 |---|---|
 | `send --dry-run` | visar alla CC utan att skicka |
-| `send [--channel left\|right\|both] [--verify]` | skickar (frågar först); `--verify` läser tillbaka dumpen och rapporterar band som inte landade |
-| `apply [--dry-run] [--base FIL]` | **hela skrivvägen**: patcha enhetens dump med GEQ **+ PEQ** ur JSON:en och pusha tillbaka, läs tillbaka och bekräfta |
+| `send [--channel left\|right\|both] [--verify]` | CC-vägen: skickar de 31 banden (frågar först); `--verify` läser tillbaka och rapporterar band som inte landade |
+| `apply [--dry-run] [--base FIL]` | dump-vägen: patcha enhetens dump med GEQ **+ PEQ** ur JSON:en och pusha tillbaka, läs tillbaka och bekräfta |
+| `roundtrip [--keep]` | hårdvarutest av dump-vägen: backup → skriv känt GEQ+PEQ-mönster → läs tillbaka + jämför → återställ. Rör inte JSON/CC |
 | `readback` | hämtar dumpen och skriver ut 31+31 GEQ-band + 6 PEQ-filter |
 | `grab FIL.syx` / `probe` / `probe --manual` | spara dump / kartlägg dumpen (dumpa, ändra en sak, dumpa, diffa) |
 | `push [--send-only] FIL.syx` | skicka en dump till enheten – testet av RCV MEMORY DUMP, protokoll i `docs/midi.md` avsnitt 4 |
@@ -404,13 +444,18 @@ Kommandotabell i `docs/midi.md` avsnitt 8; de viktigaste:
 `send` skickar **båda kanalerna** som default (Stereolink av). Före skarp
 körning: `dsp8000.CC_OFFSET` = enhetens `CNTL RCV`.
 
-`apply` skriver även de parametriska filtren (via minnesdumpen, RCV MEMORY
-DUMP bekräftad 2026-09-03 – se `docs/midi.md` avsnitt 4/5b). Använd `send`
-om du vill röra bara grafiska EQ:n och ställa PEQ för hand.
+Dump-vägen fungerar men **kräver ett tryck på RCV MEMORY DUMP** precis före
+sändning – både `roundtrip`, `apply` och `push` pausar för det, och även
+återställningen i `roundtrip` behöver ett till tryck. `roundtrip` 2026-09-03
+skrev en GEQ-ramp + 3 PEQ-filter och läste tillbaka dem exakt. Kvar att avgöra:
+om PEQ-*läget* (PAR/AUT/SGL) måste sättas för hand efteråt – kolla PEQ-sidan.
 
 Utan `mido` går `test_rew_script.py` fortfarande att köra.
 
 ### Manuell kontroll utan REW: `dsp8000_gui.html`
+Fristående sida, pratar MIDI direkt från webbläsaren – behöver varken servern
+(`run_gui.py`) eller `.venv`. `run_gui.py`:s direktredigeringsläge gör samma sak
+via servern; den här filen finns kvar för master/program och offline-bruk.
 Öppna i **Chrome/Edge** (Web MIDI). Blockeras `file://`:
 `python3 -m http.server` → `http://localhost:8000/dsp8000_gui.html`.
 
@@ -431,10 +476,15 @@ och GEQ/PEQ som ändrats, `hex` hexdumpar. Ren stdlib, ingen MIDI.
 
 ## 9. Kända begränsningar
 
-- **PEQ och GEQ** kan nu skrivas via minnesdumpen (`apply`, RCV MEMORY DUMP
-  bekräftad 2026-09-03). Delay, gate, limiter och master-skalan ligger också i
-  dumpen men de bitfälten är **inte kartlagda**, så `apply` rör dem inte (de
-  bevaras från basdumpen). PEQ + GEQ kan även **läsas** (`readback`)
+- **GEQ** skrivs via CC (`send`) eller minnesdump (`apply`). **PEQ** skrivs bara
+  via dumpen. Dump-skrivvägen fungerar men **kräver ett tryck på RCV MEMORY
+  DUMP-knappen** precis före sändning – utan det landar inget (`roundtrip`
+  2026-09-03, `docs/midi.md` avsnitt 4/7). `roundtrip` verifierade att GEQ + PEQ
+  skrivs och läses tillbaka exakt. **Öppet:** PEQ-*läget* PAR/AUT/SGL ligger inte
+  i dumpen – kolla PEQ-sidan efter en skrivning. Delay, gate, limiter och
+  master-skalan ligger också i dumpen men bitfälten är **inte kartlagda**, så
+  `apply` rör dem inte (bevaras från basdumpen). PEQ + GEQ kan **läsas**
+  (`readback`)
 - Returväg kräver **båda MIDI-kablarna**. Enheten ekar inte CC, bara
   fader-rörelse / dump / förfrågan
 - `CC_OFFSET` måste matcha enhetens `CNTL RCV`. Master-faderns CC-skala är

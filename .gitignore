@@ -3,11 +3,16 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# genereras av show_config.py
-dsp8000_config.html
+# Allt genererat hamnar under history/ (paths.py): avläsningar, patchade dumpar,
+# EQ-förslag, råa captures, show_config-HTML. Referensdumpar som ska sparas:
+# döp om och lägg i dumps/ (se docs/midi.md). rew_eq_suggestion.json är committad
+# som exempel på formatet.
+history/
+rew_eq_suggestion_*.json
 
-# råa captures från `rew_to_dsp8000.py monitor|sysex|probe|push` (tidsstämplade).
-# Referensdumpar som ska sparas: döp om och lägg i dumps/ (se docs/midi.md).
-dsp8000_sysex_[0-9]*.syx
-dsp8000_sysex_reply_*.syx
+# äldre platser (skript skriver inte hit längre, men gamla filer kan ligga kvar)
+dsp8000_config.html
+dsp8000_applied.syx
+dsp8000_sysex_*.syx
 probe_*.syx
+roundtrip_*.syx

@@ -2,8 +2,14 @@
 Webb-GUI för DSP8000-kedjan. Tre delar på en localhost-sida:
 
   1. REW-flödet steg för steg (mät -> steg 1 -> ladda förslag -> skriv -> mät igen)
-  2. Enhetens EQ: läs av nuläget (GEQ + PEQ), redigera och skriv tillbaka via
-     minnesdumpen (apply-vägen - GEQ *och* PEQ, inte bara CC)
+  2. Enhetens EQ: välj en bas-dump (en avläsning eller en dumps/-referens),
+     fyll redigeraren (från ett valt förslag eller basens egen EQ), skriv tillbaka
+     via minnesdumpen (GEQ *och* PEQ, inte bara CC). Allt tidsstämplas i history/
+     och skrivningen patchar *exakt* den valda basen - inga implicita filer.
+     Tredelad med dialog + paus: (1) patcha basen -> history/writes/applied-<ts>.syx,
+     (2) tryck + på RCV MEMORY DUMP -> skicka, (3) enheten tillbaka på EQ-skärmen
+     -> läs tillbaka och jämför (enheten svarar inte på SysEx-förfrågan från
+     RCV-panelen).
   3. Kommandopanel: en knapp per ./run.sh-kommando, strömmad utskrift, svara
      på skriptens frågor i sidan
 
@@ -13,6 +19,7 @@ Webb-GUI för DSP8000-kedjan. Tre delar på en localhost-sida:
 Ren stdlib. Lyssnar bara på localhost. Enhetsdelen kräver mido + interfacet;
 kommandopanelen kör ./run.sh precis som terminalen.
 """
+import fnmatch
 import json
 import os
 import shlex
@@ -32,11 +39,11 @@ PORT = 8765
 
 COMMANDS = [
     ("REW → DSP8000 (steg 1)", [
-        ("", "Kör steg 1", "mät i REW, Match target, spara rew_eq_suggestion.json"),
+        ("", "Kör steg 1", "mät i REW, Match target, spara ett EQ-förslag"),
         ("--no-peq", "Steg 1 utan PEQ", "bara 31-bands grafisk EQ"),
         ("refine", "Refine", "andra varvet: mätning gjord MED EQ:n på"),
         ("target", "Visa target-fält", "REW:s riktiga target-settings-fältnamn"),
-        ("show", "Visa konfig", "generera + öppna dsp8000_config.html"),
+        ("show", "Visa konfig", "config-HTML ur rew_eq_suggestion.json (annan fil: show --input FIL)"),
     ]),
     ("DSP8000 via MIDI (steg 2)", [
         ("ports", "MIDI-portar", "lista in/ut"),
@@ -49,6 +56,7 @@ COMMANDS = [
         ("sysex", "SysEx-förfrågan", "hämta dumpen, spara som .syx"),
         ("probe", "Probe", "dumpa, CC på ett band, dumpa, diffa"),
         ("probe --manual", "Probe manuell", "pausa medan du ändrar EN sak på enheten"),
+        ("roundtrip", "Roundtrip-test", "skriv känt GEQ+PEQ-mönster via dump, läs tillbaka, återställ"),
         ("push dumps/dsp8000_sysex_p16db.syx", "Push +16 dB-dump", "test av RCV MEMORY DUMP"),
         ("calibrate", "Kalibrera", "CC→dB mot displayen"),
     ]),
@@ -58,8 +66,8 @@ COMMANDS = [
     ]),
 ]
 SUBCOMMANDS = {"help", "ports", "monitor", "sysex", "readback", "grab", "push",
-               "apply", "probe", "calibrate", "send", "show", "test", "refine",
-               "target", "house-curve", "gui"}
+               "apply", "roundtrip", "probe", "calibrate", "send", "show", "test",
+               "refine", "target", "house-curve", "gui"}
 
 state = {"proc": None, "out": "", "cmd": "", "exit": None, "gen": 0}
 lock = threading.Lock()
@@ -127,8 +135,81 @@ def _midi():
     return d
 
 
+# --- Fil-modell ---------------------------------------------------------------
+# Allt tidsstämplas och sorteras i history/ (paths.py), inte strött i repo-roten.
+# Inget kommando använder en "senaste" eller hårdkodad fil implicit - GUI:t
+# skickar alltid ett explicit filnamn och skrivningen patchar exakt den bas man
+# valt.
+#   history/reads/read-<ts>.syx           en avläsning av enhetens minne
+#   history/writes/applied-<ts>.syx       en patchad dump = det som pushas
+#   history/suggestions/suggestion-<ts>-<slug>.json   ett EQ-förslag
+# Committade referensdumpar ligger kvar i dumps/ och går också att välja som bas.
+TS_FMT = "%Y%m%d-%H%M%S"
+
+
+def _root():
+    return HERE.resolve()          # HERE kan sättas till en osymlänkad sökväg i test
+
+
+def _dir(name):
+    """history/<name>/ (skapad). name: reads | writes | suggestions."""
+    d = _root() / "history" / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _rel(p):
+    return str(Path(p).resolve().relative_to(_root()))
+
+
+def _resolve(name, *globs):
+    """name (relativt HERE) -> Path. Måste ligga i history/{reads,writes,
+    suggestions}/, dumps/ eller HERE, och matcha ett av globs. Filnamnen kommer
+    från webbläsaren."""
+    if not name:
+        raise DeviceError("Inget filnamn angivet.")
+    root = _root()
+    p = (root / name).resolve()
+    ok_parents = {root, root / "dumps",
+                  root / "history" / "reads", root / "history" / "writes",
+                  root / "history" / "suggestions"}
+    if p.parent not in ok_parents:
+        raise DeviceError(f"oväntad sökväg: {name}")
+    if not any(fnmatch.fnmatch(p.name, g) for g in globs):
+        raise DeviceError(f"oväntat filnamn: {name}")
+    if not p.is_file():
+        raise DeviceError(f"{name} finns inte.")
+    return p
+
+
+def _load_dump(name, *globs):
+    full = _resolve(name, *globs).read_bytes()
+    if not (syx_tools.is_memory_dump(full) and len(full) == 12112):
+        raise DeviceError(f"{name}: inte en giltig minnesdump "
+                          "(F0 00 20 32 00 01 4F … , 12112 byte).")
+    return full
+
+
+def _dump_summary(full):
+    g = syx_tools.decode_geq(full)
+    npeq = sum(1 for r in syx_tools.decode_peq(full) if r["on"])
+    gmax = max((abs(x) for x in g["L"] + g["R"]), default=0)
+    return f"sub {full[6]:02x} {full[7]:02x} · GEQ ±{gmax:g} dB · PEQ {npeq}/6 på"
+
+
+def _editor_view(full):
+    """Full dump -> redigerarens fält (31 band L/R, master, L1/L2/L3-PEQ)."""
+    g = syx_tools.decode_geq(full)
+    pq = syx_tools.decode_peq(full)
+    return {"bands": [f"{f:g}" for f in dsp8000.ISO_BANDS],
+            "geq_L": g["L"], "geq_R": g["R"],
+            "master_L": g["L_master"], "master_R": g["R_master"],
+            "peq": [pq[i] for i in (0, 2, 4)]}      # L1 L2 L3 (R = samma vid mono)
+
+
 def device_read():
-    """Hämta enhetens dump och returnera GEQ + PEQ som JSON. Ändrar inget."""
+    """Läs enhetens minne, spara som history/reads/read-<ts>.syx och returnera
+    filnamnet + avkodad GEQ/PEQ. Ändrar inget. Enheten måste stå på EQ-skärmen."""
     d = _midi()
     with devlock:
         with d.open_output() as out, d.open_input() as inp:
@@ -137,13 +218,52 @@ def device_read():
         raise DeviceError("Ingen dump. Kolla EXCL SND/RCV ON, båda MIDI-kablarna i, "
                           "enheten på EQ-huvudskärmen.")
     full = b"\xf0" + dump + b"\xf7"
-    g = syx_tools.decode_geq(full)
-    pq = syx_tools.decode_peq(full)
-    return {"bands": [f"{f:g}" for f in dsp8000.ISO_BANDS],
-            "geq_L": g["L"], "geq_R": g["R"],
-            "master_L": g["L_master"], "master_R": g["R_master"],
-            "peq": [pq[i] for i in (0, 2, 4)],      # L1 L2 L3 (R = samma vid mono)
-            "sub": f"{full[6]:02x} {full[7]:02x}"}
+    p = _dir("reads") / f"read-{time.strftime(TS_FMT)}.syx"
+    p.write_bytes(full)
+    return {"name": _rel(p), "summary": _dump_summary(full), **_editor_view(full)}
+
+
+def read_base(name):
+    """Avkoda en vald bas-fil (history/reads/*.syx eller dumps/*.syx) för
+    redigeraren - så "Basens EQ →" och kolumnerna funkar utan enheten."""
+    full = _load_dump(name, "*.syx")
+    return {"name": name, "summary": _dump_summary(full), **_editor_view(full)}
+
+
+def bases():
+    """Valbara bas-dumpar, nyaste först: dina avläsningar + committade referenser."""
+    out = [{"name": _rel(p), "kind": "avläsning"}
+           for p in sorted(_dir("reads").glob("*.syx"), reverse=True)]
+    out += [{"name": _rel(p), "kind": "referens"}
+            for p in sorted((_root() / "dumps").glob("*.syx"))]
+    return {"bases": out}
+
+
+def device_cc(idx, db, channel="both"):
+    """Skicka ETT GEQ-band som Control Change direkt till enheten (samma väg som
+    rew_to_dsp8000 send, fast ett band). För direktredigering - ingen dump, ingen
+    verifiering, rör inte master/PEQ eller någon bas-fil."""
+    d = _midi()
+    try:
+        idx = int(idx)
+    except (TypeError, ValueError):
+        raise DeviceError("ogiltigt bandindex")
+    if not 0 <= idx < 31:
+        raise DeviceError(f"band {idx} utanför 0-30")
+    chans = ["left", "right"] if channel == "both" else [channel]
+    if any(c not in ("left", "right") for c in chans):
+        raise DeviceError(f"okänd kanal: {channel}")
+    freq = dsp8000.ISO_BANDS[idx]
+    val = dsp8000.db_to_cc(float(db))
+    with devlock:
+        with d.open_output() as out:
+            for c in chans:
+                cc = (dsp8000.CC_GRAPHIC_LEFT if c == "left"
+                      else dsp8000.CC_GRAPHIC_RIGHT)[freq]
+                out.send(d.mido.Message("control_change", channel=0,
+                                        control=cc, value=val))
+                time.sleep(d.SEND_GAP_S)
+    return {"band": f"{freq:g}", "cc_value": val, "db": dsp8000.cc_to_db(val)}
 
 
 def _peqs6(peq3):
@@ -158,27 +278,76 @@ def _peqs6(peq3):
     return out
 
 
-def device_write(geq, peq3):
-    """Patcha en färsk dump med geq (31 dB, på L och R) + peq3 och pusha tillbaka,
-    läs tillbaka och verifiera. Returnerar {applied, mismatches:[...]}"""
+# Skrivvägen via dumpen är tredelad, precis som terminalens roundtrip/apply:
+#   1. device_prepare: patcha den VALDA bas-dumpen (`base`), ingen MIDI
+#   2. device_send:     enheten i mottagningsläge (RCV MEMORY DUMP +) -> pusha
+#   3. device_verify:   enheten tillbaka på EQ-skärmen -> läs tillbaka, jämför
+# GUI:t visar en dialog före varje steg. Den patchade dumpen mellanlagras här.
+_prepared = {}
+
+
+def device_prepare(base, geq, peq3):
+    """Steg 1: patcha in geq (31 dB, L+R) + peq3 i den valda bas-dumpen `base`,
+    spara history/writes/applied-<ts>.syx och mellanlagra. Ingen MIDI. `base` är ett
+    explicit filnamn (välj i Bas-listan eller kör "Läs av enheten")."""
+    if not base:
+        raise DeviceError('Ingen bas vald. Välj en avläsning i Bas-listan eller kör '
+                          '"Läs av enheten" - skrivningen patchar exakt den filen.')
     if len(geq) != 31:
         raise DeviceError(f"GEQ behöver 31 värden, fick {len(geq)}.")
+    full = _load_dump(base, "*.syx")
     geq = [float(x) for x in geq]
-    peqs = _peqs6(peq3)
+    patched = syx_tools.patch_dump(full, geq, geq, _peqs6(peq3))
+    p = _dir("writes") / f"applied-{time.strftime(TS_FMT)}.syx"
+    p.write_bytes(patched)
+    _prepared.clear()
+    _prepared.update(patched=patched, applied=_rel(p), base=base)
+
+    gb, gp = syx_tools.decode_geq(full), syx_tools.decode_geq(patched)
+    pb, pp = syx_tools.decode_peq(full), syx_tools.decode_peq(patched)
+    changes = []
+    for ch in ("L", "R"):
+        n = sum(1 for x, y in zip(gb[ch], gp[ch]) if abs(x - y) > 0.01)
+        if n:
+            changes.append(f"{n} GEQ-band {ch}")
+    npeq = sum(1 for x, y in zip(pb[::2], pp[::2]) if x != y)
+    if npeq:
+        changes.append(f"{npeq} PEQ-filter")
+    return {"applied": _prepared["applied"], "base": base,
+            "changes": changes or ["inga ändringar mot basen"]}
+
+
+def device_send():
+    """Steg 2: pusha den mellanlagrade dumpen. Enheten måste stå i mottagningsläge
+    (tryck + på RCV MEMORY DUMP). Efter pushen står enheten kvar på RCV-panelen
+    och svarar INTE på SysEx-förfrågan därifrån - återläsningen är ett eget steg
+    (device_verify) med en paus för att ställa enheten tillbaka på EQ-skärmen."""
+    patched = _prepared.get("patched")
+    if patched is None:
+        raise DeviceError("Inget förberett - kör Skriv-steget (steg 1) igen.")
+    d = _midi()
+    with devlock:
+        with d.open_output() as out:
+            out.send(d.mido.Message("sysex", data=list(patched[1:-1])))
+            time.sleep(5)       # 12 kB @ 31250 baud ≈ 4 s - håll porten öppen tills allt gått ut
+    return {"sent": len(patched), "applied": _prepared.get("applied")}
+
+
+def device_verify():
+    """Steg 3: enheten tillbaka på EQ-huvudskärmen -> hämta dumpen och jämför
+    GEQ + PEQ mot det som skrevs. {mismatches:[...], peq_on: bool}. Kör om (knappen
+    "Verifiera skrivningen") om enheten inte hann tillbaka till EQ-skärmen."""
+    patched = _prepared.get("patched")
+    if patched is None:
+        raise DeviceError("Inget att verifiera - kör Skriv-steget (steg 1) först.")
     d = _midi()
     with devlock:
         with d.open_output() as out, d.open_input() as inp:
-            base = d.grab_dump(out, inp)
-            if base is None:
-                raise DeviceError("Ingen bas-dump. Kolla kablar/EXCL/skärm.")
-            patched = syx_tools.patch_dump(b"\xf0" + base + b"\xf7", geq, geq, peqs)
-            Path("dsp8000_applied.syx").write_bytes(patched)
-            out.send(d.mido.Message("sysex", data=list(patched[1:-1])))
-            time.sleep(6)                       # 12 kB @ 31250 baud ≈ 4 s + marginal
             after = d.grab_dump(out, inp)
     if after is None:
-        raise DeviceError("Skrev, men ingen återläsning kom. Enheten kanske bytte "
-                          "skärm - kolla displayen, kör Läs av igen.")
+        raise DeviceError("Ingen återläsning. Ställ enheten på EQ-huvudskärmen "
+                          "(SysEx-förfrågan besvaras bara därifrån) och klicka "
+                          "Verifiera skrivningen igen.")
     got = b"\xf0" + after + b"\xf7"
     gw, gg = syx_tools.decode_geq(patched), syx_tools.decode_geq(got)
     pw, pg = syx_tools.decode_peq(patched), syx_tools.decode_peq(got)
@@ -190,21 +359,56 @@ def device_write(geq, peq3):
     for lbl, x, y in zip(syx_tools.PEQ_LABELS, pw, pg):
         if x != y:
             bad.append(f"PEQ {lbl}: ville {syx_tools.peq_str(x)}, fick {syx_tools.peq_str(y)}")
-    return {"applied": "dsp8000_applied.syx", "mismatches": bad}
+    if not bad:
+        _prepared.pop("patched", None)
+    return {"mismatches": bad, "peq_on": any(r["on"] for r in pw),
+            "applied": _prepared.get("applied")}
 
 
-def suggestion():
-    """rew_eq_suggestion.json -> {geq:[31], peq:[≤3]} för redigeraren. Ingen MIDI."""
+def device_write(geq, peq3):
+    """read + prepare + send + verify i följd, utan dialogerna emellan - för
+    självtestet och scriptad användning. GUI:t kör stegen var för sig med paus
+    emellan. Basen är en egen färsk avläsning."""
+    r = device_read()
+    device_prepare(r["name"], geq, peq3)
+    device_send()
+    return {"applied": _prepared.get("applied"), "base": r["name"], **device_verify()}
+
+
+SUGGESTION_GLOBS = ("suggestion-*.json", "rew_eq_suggestion*.json")
+
+
+def rew_measurements():
+    """[{id,title,date}] från REW:s API. Kräver REW igång med API:t på."""
+    import rew_script
+    try:
+        ms = rew_script.list_measurements()
+    except Exception as e:      # ConnectionError, timeout, HTTP-fel ...
+        raise DeviceError(f"Når inte REW:s API ({type(e).__name__}). Starta REW och "
+                          "slå på servern: Preferences → API → Start server.")
+    return [{"id": m["id"], "title": m.get("title", "?"), "date": m.get("date", "")}
+            for m in ms]
+
+
+def suggestions():
+    """Valbara EQ-förslag, nyaste först: history/suggestions/*.json (dina
+    körningar) + committade rew_eq_suggestion*.json i repo-roten."""
+    hist = sorted(_dir("suggestions").glob("*.json"), reverse=True)
+    rootfs = sorted(_root().glob("rew_eq_suggestion*.json"),
+                    key=lambda p: p.stat().st_mtime, reverse=True)
+    return {"files": [_rel(p) for p in hist] + [p.name for p in rootfs]}
+
+
+def suggestion(name):
+    """Ett valt EQ-förslag -> {geq:[31], peq:[≤3], name, generated_at} för
+    redigeraren. Ingen MIDI. `name` är explicit (välj i Förslag-listan)."""
     import rew_to_dsp8000 as r
-    if not r.JSON_FILE.exists():
-        raise DeviceError(f"{r.JSON_FILE} saknas - kör steg 1 först.")
-    data = json.loads(r.JSON_FILE.read_text(encoding="utf-8"))
+    p = _resolve(name, *SUGGESTION_GLOBS)
+    data = json.loads(p.read_text(encoding="utf-8"))
     geq, peqs6 = r.suggestion_to_geq_peq(data)
-    peq3 = []
-    for i in (0, 2, 4):                          # L1 L2 L3
-        rec = peqs6[i]
-        peq3.append(None if rec is None else {**rec, "on": True})
-    return {"geq": geq, "peq": peq3}
+    peq3 = [None if peqs6[i] is None else {**peqs6[i], "on": True} for i in (0, 2, 4)]
+    return {"geq": geq, "peq": peq3, "name": name,
+            "generated_at": data.get("generated_at", "")}
 
 
 # ---------------------------------------------------------------- HTTP
@@ -214,7 +418,7 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
  body{font:14px system-ui,sans-serif;margin:1rem;max-width:70rem}
  h1{font-size:1.15rem} h2{font-size:.95rem;margin:1.4rem 0 .4rem}
  h3{font-size:.8rem;margin:1rem 0 .3rem;opacity:.7;text-transform:uppercase;letter-spacing:.04em}
- button{font:inherit;padding:.3rem .6rem;cursor:pointer}
+ button,select{font:inherit;padding:.3rem .5rem;cursor:pointer}
  .grp{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
  ol.steps{margin:.3rem 0;padding-left:1.3rem} ol.steps li{margin:.35rem 0}
  .bar{display:flex;gap:.4rem;margin:.6rem 0;flex-wrap:wrap;align-items:center}
@@ -222,11 +426,25 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
  table{border-collapse:collapse} th,td{padding:.15rem .4rem;text-align:right}
  th{font-weight:600;opacity:.7} td.hz{text-align:left;white-space:nowrap}
  input[type=number]{font:inherit;width:4.2rem;padding:.1rem .2rem;text-align:right}
- .meter{position:relative;display:inline-block;width:130px;height:11px;background:#8882;vertical-align:middle}
- .meter::before{content:"";position:absolute;left:50%;top:0;bottom:0;border-left:1px solid #8886}
- .meter i{position:absolute;top:0;bottom:0}
- .meter .pos{left:50%;background:#3a8} .meter .neg{background:#c66}
- #geq{max-height:60vh;overflow:auto;display:inline-block;vertical-align:top}
+ label.tgl{display:flex;gap:.35rem;align-items:center;cursor:pointer}
+ label.tgl.on{color:#c80;font-weight:600}
+ .editrow{display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start}
+ /* GEQ som lodräta reglage, likt dsp8000_gui.html */
+ .strip{display:flex;gap:1px;overflow-x:auto;padding-bottom:.4rem;max-width:100%}
+ .band{display:flex;flex-direction:column;align-items:center;min-width:20px}
+ .band .dbv{font-size:10px;font-variant-numeric:tabular-nums;min-height:1.1em}
+ .band input[type=range]{writing-mode:vertical-lr;direction:rtl;width:15px;height:150px;margin:2px 0}
+ .band .bhz{font-size:9px;opacity:.65;writing-mode:vertical-rl;height:3.4em;white-space:nowrap}
+ .band.dirty .dbv{color:#c80;font-weight:600}
+ #curve{width:100%;max-width:640px;aspect-ratio:600/220;height:auto;background:#8881;border-radius:4px;display:block;margin:.4rem 0}
+ #curve .grid{stroke:#8883} #curve .grid0{stroke:#8887}
+ #curve .gl{fill:#888;font-size:9px}
+ #curve path{fill:none;stroke-linejoin:round}
+ #curve .c-sum{stroke:#e35d8a;stroke-width:2.3}
+ #curve .c-geq{stroke:#2a9d6b;stroke-width:1.4}
+ #curve .c-peq{stroke:#4c86e6;stroke-width:1.4}
+ #curve .c-bas{stroke:#8a8a8a;stroke-width:1.2;stroke-dasharray:3 3}
+ .leg span{margin-right:1rem;white-space:nowrap} .leg b{font-weight:400}
  #peq input[type=number]{width:5rem}
  form.runf{display:flex;gap:.4rem;margin:.5rem 0} form.runf input[type=text]{flex:1;font:inherit;padding:.3rem}
  #status{opacity:.7;margin:-.2rem 0 .3rem} .run{color:#c80}
@@ -236,46 +454,93 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
 </style>
 <h1>DSP8000 – kontrollpanel</h1>
 
-<h2>1. REW-flödet, steg för steg</h2>
-<ol class="steps">
- <li>Mät i REW med EQ:n i <b>bypass</b> (IN/OUT-LED släckt).</li>
- <li><button data-run="">Kör steg 1</button> läser mätningen, kör Match target,
-     sparar <code>rew_eq_suggestion.json</code>. <span class="muted">(REW måste köra med API:t på.)</span></li>
- <li><button id="loadSug">Ladda REW-förslag → redigeraren</button> nedan.</li>
- <li>Granska/justera och <button id="write2">Skriv till enheten</button> (GEQ + PEQ via dumpen).</li>
- <li>Mät igen med EQ:n <b>aktiv</b> (LED tänd), sedan <button data-run="refine">Refine</button> → skriv igen. Ett–två varv räcker.</li>
-</ol>
+<h2>Skriv EQ till enheten (GEQ + PEQ via minnesdumpen)</h2>
 
-<h2>2. Enhetens EQ</h2>
 <div class="bar">
- <button id="read">Läs av enheten</button>
- <button id="loadSug2">Ladda REW-förslag</button>
- <button id="fromCur">Nuläge → redigera</button>
- <button id="write">Skriv till enheten (apply)</button>
- <button id="flat">Nolla redigering</button>
+ <b>1. Bas-dump:</b>
+ <select id="baseSel"><option value="">… läser history/ …</option></select>
+ <button id="read">Läs av enheten (ny bas)</button>
+ <span id="baseInfo" class="muted"></span>
+</div>
+<div class="bar">
+ <b>2. Fyll redigeraren:</b>
+ <select id="sugSel"><option value="">…</option></select>
+ <button id="loadSug">Ladda valt förslag</button>
+ <button id="fromCur">Basens EQ →</button>
+ <button id="flat">Nolla</button>
+</div>
+<div class="bar">
+ <b>3.</b>
+ <button id="write"><b>Skriv till enheten</b></button>
+ <button id="verify">Verifiera skrivningen</button>
  <span id="status2">&nbsp;</span>
 </div>
+<p class="muted">Skrivningen patchar <b>exakt den valda bas-dumpen</b> med redigerarens
+ GEQ + PEQ och sparar <code>history/writes/applied-&lt;tid&gt;.syx</code> – ingen implicit
+ "senaste"-fil. Tre steg med dialog: <b>(1)</b> patcha, <b>(2)</b> tryck
+ <b>+ på RCV MEMORY DUMP</b> → skicka, <b>(3)</b> enheten <b>tillbaka på EQ-skärmen</b>
+ → läs tillbaka och jämför. Gick steg 3 fel: klicka <b>Verifiera skrivningen</b> när
+ enheten står rätt. "Läs av enheten" efteråt ger en ny bas för nästa varv.</p>
+<p class="muted" id="editorFrom">Redigeraren: tom</p>
 
-<div style="display:flex;gap:2rem;flex-wrap:wrap">
+<div class="bar">
+ <label class="tgl" id="directLbl"><input type="checkbox" id="direct">
+  <b>Direktredigering</b> – GEQ-reglaget skickar CC direkt till enheten (ingen dump)</label>
+ <select id="directCh" disabled title="vilken kanal CC går till">
+  <option value="both">L + R</option><option value="left">bara L</option><option value="right">bara R</option>
+ </select>
+</div>
+<p class="muted" id="directNote" hidden>CC-läge: reglagen ändrar enheten direkt men
+ <b>inte</b> bas-dumpen. Master, PEQ och verifiering är kvar på dump-vägen. Läs av
+ enheten igen innan du gör en dump-skrivning ovanpå.</p>
+
+<svg id="curve" viewBox="0 0 600 220"></svg>
+<div class="muted leg">
+ <span style="color:#e35d8a">■ <b>Summa (GEQ+PEQ)</b></span>
+ <span style="color:#2a9d6b">■ <b>GEQ</b></span>
+ <span style="color:#4c86e6">■ <b>PEQ</b></span>
+ <span style="color:#8a8a8a">▪ <b>Vald bas</b></span>
+</div>
+
+<div class="editrow">
  <div>
   <h3>Grafisk EQ (31 band)</h3>
-  <div id="geq"><table><thead><tr>
-    <th class="hz">Band</th><th>Nu L</th><th>Nu R</th><th></th><th>Redigera</th>
-   </tr></thead><tbody id="geqRows"></tbody></table></div>
+  <div class="strip" id="strip"></div>
   <div class="muted" id="master">&nbsp;</div>
  </div>
  <div>
   <h3>Parametriska filter (max 3)</h3>
   <table id="peq"><thead><tr>
-    <th>#</th><th>På</th><th>Frekvens (Hz)</th><th>Bandbredd (okt)</th><th>Gain (dB)</th><th>Nu</th>
+    <th>#</th><th>På</th><th>Frekvens (Hz)</th><th>Bandbredd (okt)</th><th>Gain (dB)</th><th>Bas</th>
    </tr></thead><tbody id="peqRows"></tbody></table>
-  <p class="muted">Skrivs till <b>både L och R</b> (mätningen är L+R). Enheten lagrar
-   inte läget PAR/AUT/SGL i dumpen – sätt det för hand om du vill ha AUT/SGL.</p>
+  <p class="muted">Skrivs till <b>både L och R</b> (mätningen är L+R). Dumpen sätter
+   filtrets frekvens/bandbredd/gain, men <b>inte</b> läget PAR/AUT/SGL – kolla PEQ-sidan
+   på enheten efter skrivning och sätt läget där om filtren inte bearbetar ljudet.</p>
  </div>
 </div>
 
 <details>
- <summary>3. Kommandopanel (./run.sh)</summary>
+ <summary>Skapa / uppdatera ett EQ-förslag från en REW-mätning</summary>
+ <ol class="steps">
+  <li>Starta REW med API:t på (Preferences → API → <i>Start server</i>) och kör en
+      sweep med EQ:n i <b>bypass</b> (IN/OUT-LED släckt).</li>
+  <li>Välj mätning:
+      <select id="measSel"><option value="">… läser från REW …</option></select>
+      <button id="measRefresh" title="hämta listan från REW igen">↻</button>
+      <button id="runStep1">Kör steg 1</button>.
+      Kör Match target och skriver <code>history/suggestions/suggestion-&lt;tid&gt;-&lt;mätning&gt;.json</code>
+      (ingen vald mätning = välj i kommandopanelen).</li>
+  <li>Utskrift och ev. frågor hamnar i <b>Kommandopanelen</b> nedan – den öppnas
+      automatiskt, svara i rutan där. När den är klar:
+      <button id="loadSug3">Ladda in senaste förslaget</button>.</li>
+  <li>Andra varvet (ny mätning gjord <b>med</b> EQ:n aktiv): välj den nya mätningen
+      och det förslag du vill förfina, <button id="runRefine">Refine → nytt förslag</button>,
+      ladda in, skriv igen.</li>
+ </ol>
+</details>
+
+<details id="cmdpanel">
+ <summary>Kommandopanel (./run.sh)</summary>
  <div id="groups"></div>
  <form class="runf" id="runf"><input type="text" id="cmdline"
    placeholder="kommando + flaggor, t.ex. send --verify  eller  grab dumps/x.syx">
@@ -292,12 +557,12 @@ const BANDS = __BANDS__;
 const $ = id => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-// ---- redigerare: bygg 31 GEQ-rader + 3 PEQ-rader ----
-$('geqRows').innerHTML = BANDS.map((hz, i) =>
-  `<tr><td class="hz">${hz} Hz</td>`
-  + `<td id="nl${i}" class="muted">–</td><td id="nr${i}" class="muted">–</td>`
-  + `<td><span class="meter"><i id="mb${i}"></i></span></td>`
-  + `<td><input type="number" id="eg${i}" min="-16" max="16" step="0.5" value="0"></td></tr>`).join('');
+// ---- redigerare: lodrätt GEQ-reglage per band + 3 PEQ-rader ----
+const hzLbl = hz => (+hz >= 1000 ? (+hz / 1000) + 'k' : hz);
+$('strip').innerHTML = BANDS.map((hz, i) =>
+  `<div class="band" id="bd${i}"><span class="dbv" id="dv${i}">0.0</span>`
+  + `<input type="range" id="eg${i}" min="-16" max="16" step="0.5" value="0" title="${hz} Hz">`
+  + `<span class="bhz">${hzLbl(hz)}</span></div>`).join('');
 $('peqRows').innerHTML = [0,1,2].map(i =>
   `<tr><td>${i+1}</td>`
   + `<td><input type="checkbox" id="pon${i}"></td>`
@@ -306,21 +571,40 @@ $('peqRows').innerHTML = [0,1,2].map(i =>
   + `<td><input type="number" id="pg${i}" min="-48" max="16" step="0.5" value="0"></td>`
   + `<td id="pnow${i}" class="muted">–</td></tr>`).join('');
 
-function drawMeter(i, db) {
-  const f = clamp(db / 16, -1, 1), el = $('mb'+i);
-  if (f >= 0) { el.className = 'pos'; el.style.left = '50%'; el.style.width = (f*50)+'%'; }
-  else { el.className = 'neg'; el.style.width = (-f*50)+'%'; el.style.left = (50+f*50)+'%'; }
+let ccT = {};
+function onGeqInput(i) {
+  const v = +$('eg'+i).value;
+  $('dv'+i).textContent = v.toFixed(1);
+  $('bd'+i).classList.toggle('dirty', Math.abs(v) > 0.01);
+  drawCurve();
+  if (!$('direct').checked) return;
+  clearTimeout(ccT[i]);
+  ccT[i] = setTimeout(async () => {
+    try { const d = await jpost('/device/cc', {idx: i, db: v, channel: $('directCh').value});
+      say(`CC → ${d.band} Hz ${(+d.db).toFixed(2)} dB`, 'ok'); }
+    catch (e) { say(e, 'err'); }
+  }, 70);
 }
-BANDS.forEach((_, i) => { $('eg'+i).addEventListener('input', () => drawMeter(i, +$('eg'+i).value)); drawMeter(i, 0); });
+BANDS.forEach((_, i) => $('eg'+i).addEventListener('input', () => onGeqInput(i)));
+[0,1,2].forEach(i => ['pon','pf','pb','pg'].forEach(k =>
+  $(k+i).addEventListener('input', drawCurve)));
 
-function setEditorGeq(arr) { BANDS.forEach((_, i) => { const v = +(arr[i]||0); $('eg'+i).value = v; drawMeter(i, v); }); }
+function setEditorGeq(arr) {
+  BANDS.forEach((_, i) => {
+    const v = clamp(+(arr[i] || 0), -16, 16);
+    $('eg'+i).value = v; $('dv'+i).textContent = v.toFixed(1);
+    $('bd'+i).classList.toggle('dirty', Math.abs(v) > 0.01);
+  });
+  drawCurve();
+}
 function getEditorGeq() { return BANDS.map((_, i) => +$('eg'+i).value); }
 function setEditorPeq(peq) {
   [0,1,2].forEach(i => {
-    const r = (peq||[])[i];
+    const r = (peq || [])[i];
     $('pon'+i).checked = !!(r && r.on);
     if (r) { $('pf'+i).value = Math.round(r.freq_hz); $('pb'+i).value = (+r.bw_oct).toFixed(2); $('pg'+i).value = (+r.gain_db).toFixed(1); }
   });
+  drawCurve();
 }
 function getEditorPeq() {
   return [0,1,2].map(i => ({on: $('pon'+i).checked, freq_hz: +$('pf'+i).value,
@@ -328,47 +612,232 @@ function getEditorPeq() {
 }
 const peqStr = r => r.on ? `${Math.round(r.freq_hz)} Hz ${(+r.bw_oct).toFixed(2)} okt ${(+r.gain_db).toFixed(1)} dB` : 'OFF';
 
+// ---- EQ-kurva: RBJ peaking-biquad per band/filter, kaskad, magnitud i dB ----
+const FS = 48000;
+const FREQS = Array.from({length: 168}, (_, i) => 20 * Math.pow(1000, i / 167));
+function peakBiquad(f0, Q, gainDb) {
+  const A = Math.pow(10, gainDb / 40), w0 = 2 * Math.PI * f0 / FS;
+  const cw = Math.cos(w0), alpha = Math.sin(w0) / (2 * Q);
+  const a0 = 1 + alpha / A;
+  return [(1 + alpha * A) / a0, -2 * cw / a0, (1 - alpha * A) / a0,
+          -2 * cw / a0, (1 - alpha / A) / a0];
+}
+function magDb(cascade, f) {
+  const w = 2 * Math.PI * f / FS;
+  const c1 = Math.cos(-w), s1 = Math.sin(-w), c2 = Math.cos(-2 * w), s2 = Math.sin(-2 * w);
+  let db = 0;
+  for (const [b0, b1, b2, a1, a2] of cascade) {
+    const nr = b0 + b1 * c1 + b2 * c2, ni = b1 * s1 + b2 * s2;
+    const dr = 1 + a1 * c1 + a2 * c2, di = a1 * s1 + a2 * s2;
+    db += 10 * Math.log10((nr * nr + ni * ni) / (dr * dr + di * di));
+  }
+  return db;
+}
+function geqCascade(g) {
+  const c = [];
+  BANDS.forEach((hz, i) => { if (Math.abs(g[i]) > 0.01) c.push(peakBiquad(+hz, 4.32, g[i])); });
+  return c;
+}
+function peqCascade(ps) {
+  const c = [];
+  (ps || []).forEach(p => {
+    if (!p.on || Math.abs(p.gain_db) < 0.01 || !(p.bw_oct > 0)) return;
+    const r = Math.pow(2, p.bw_oct);
+    c.push(peakBiquad(p.freq_hz, Math.sqrt(r) / (r - 1), p.gain_db));
+  });
+  return c;
+}
+const CW = 600, CH = 220, PL = 32, PR = 6, PT = 10, PB = 20;
+const fx = f => PL + Math.log10(f / 20) / 3 * (CW - PL - PR);
+function drawCurve() {
+  const gc = geqCascade(getEditorGeq()), pc = peqCascade(getEditorPeq());
+  const S = {
+    bas: curBase ? geqCascade(curBase.geq_L).concat(peqCascade(curBase.peq)) : null,
+    geq: gc, peq: pc, sum: gc.concat(pc),
+  };
+  const resp = {};
+  let lo = -6, hi = 6;
+  for (const k in S) if (S[k]) {
+    resp[k] = FREQS.map(f => magDb(S[k], f));
+    for (const v of resp[k]) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  }
+  lo = Math.max(-30, Math.floor(lo / 3) * 3); hi = Math.min(30, Math.ceil(hi / 3) * 3);
+  const fy = db => PT + (hi - db) / (hi - lo) * (CH - PT - PB);
+  const d = a => 'M' + a.map((v, i) => fx(FREQS[i]).toFixed(1) + ' ' + fy(v).toFixed(1)).join(' L');
+  let s = '';
+  for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000])
+    s += `<line class="grid" x1="${fx(f).toFixed(1)}" y1="${PT}" x2="${fx(f).toFixed(1)}" y2="${CH - PB}"/>`
+       + `<text class="gl" x="${fx(f).toFixed(1)}" y="${CH - 6}" text-anchor="middle">${f >= 1000 ? f / 1000 + 'k' : f}</text>`;
+  for (let db = Math.ceil(lo / 6) * 6; db <= hi; db += 6)
+    s += `<line class="${db === 0 ? 'grid0' : 'grid'}" x1="${PL}" y1="${fy(db).toFixed(1)}" x2="${CW - PR}" y2="${fy(db).toFixed(1)}"/>`
+       + `<text class="gl" x="2" y="${(fy(db) + 3).toFixed(1)}">${db > 0 ? '+' + db : db}</text>`;
+  if (resp.bas) s += `<path class="c-bas" d="${d(resp.bas)}"/>`;
+  s += `<path class="c-geq" d="${d(resp.geq)}"/><path class="c-peq" d="${d(resp.peq)}"/><path class="c-sum" d="${d(resp.sum)}"/>`;
+  $('curve').innerHTML = s;
+}
+
 async function jget(p) { const r = await fetch(p); const j = await r.json(); if (j.error) throw j.error; return j; }
 async function jpost(p, b) { const r = await fetch(p,{method:'POST',body:JSON.stringify(b||{})}); const j = await r.json(); if (j.error) throw j.error; return j; }
 function say(msg, cls) { $('status2').textContent = msg; $('status2').className = cls || ''; }
 
-let lastRead = null;
+let curBase = null;                 // avkodad vald bas-dump {name, geq_L, ...}
+function setEditorFrom(s) { $('editorFrom').textContent = 'Redigeraren: ' + s; }
+function showBase(d) {
+  [0,1,2].forEach(i => $('pnow'+i).textContent = d ? peqStr(d.peq[i]) : '–');
+  $('master').textContent = d ? `Bas-master L ${d.master_L}, R ${d.master_R} (rått)` : ' ';
+  $('baseInfo').textContent = d ? d.summary : '';
+  drawCurve();
+}
+
+$('direct').onchange = () => {
+  const on = $('direct').checked;
+  $('directCh').disabled = !on;
+  $('directLbl').classList.toggle('on', on);
+  $('directNote').hidden = !on;
+  say(on ? 'Direktredigering PÅ – GEQ-reglagen skickar CC direkt till enheten.'
+        : 'Direktredigering av.', on ? 'ok' : '');
+};
+
+async function loadBaseList(select) {
+  const sel = $('baseSel');
+  try {
+    const d = await jget('/bases');
+    sel.innerHTML = d.bases.map(b => `<option value="${b.name}">${b.name}  (${b.kind})</option>`).join('')
+      || '<option value="">(inga – "Läs av enheten")</option>';
+    if (select) sel.value = select;
+  } catch (e) { sel.innerHTML = `<option value="">${e}</option>`; }
+  await useBase();
+}
+async function useBase() {
+  const name = $('baseSel').value;
+  curBase = null; showBase(null);
+  if (!name) return;
+  try { curBase = await jpost('/device/read-base', {name}); showBase(curBase); }
+  catch (e) { $('baseInfo').textContent = e; }
+}
+$('baseSel').onchange = useBase;
+
+const readDialog = 'Ställ enheten på EQ-huvudskärmen.\n\nSysEx-läsningen besvaras '
+  + 'bara därifrån. Klicka OK när enheten står där.';
 $('read').onclick = async () => {
-  say('läser av enheten …'); try {
-    const d = await jpost('/device/read'); lastRead = d;
-    BANDS.forEach((_, i) => {
-      $('nl'+i).textContent = d.geq_L[i].toFixed(1); $('nr'+i).textContent = d.geq_R[i].toFixed(1);
-    });
-    [0,1,2].forEach(i => $('pnow'+i).textContent = peqStr(d.peq[i]));
-    $('master').textContent = `Master L ${d.master_L}, R ${d.master_R} (rått) · dump ${d.sub}`;
-    say('avläst – tryck "Nuläge → redigera" för att utgå från detta', 'ok');
+  if (!confirm(readDialog)) return;
+  say('läser av enheten …');
+  try {
+    const d = await jpost('/device/read');
+    say('avläst → ' + d.name, 'ok');
+    await loadBaseList(d.name);
   } catch (e) { say(e, 'err'); }
 };
 $('fromCur').onclick = () => {
-  if (!lastRead) return say('läs av enheten först', 'err');
-  setEditorGeq(lastRead.geq_L);
-  setEditorPeq(lastRead.peq.map(r => ({...r, on: r.on})));
-  say('redigeraren fylld från nuläget (vänster kanal)', 'ok');
+  if (!curBase) return say('välj en bas-dump först', 'err');
+  setEditorGeq(curBase.geq_L);
+  setEditorPeq(curBase.peq.map(r => ({...r, on: r.on})));
+  setEditorFrom('bas ' + curBase.name + ' (vänster kanal)');
+  say('redigeraren fylld från basen', 'ok');
 };
+const slug = s => (s||'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || 'matning';
+function nowTs() {
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+async function loadMeasList() {
+  const sel = $('measSel');
+  try {
+    const d = await jget('/measurements');
+    sel.innerHTML = d.map(m =>
+      `<option value="${m.id}|${slug(m.title)}">${m.id}: ${m.title}${m.date ? ' ('+m.date+')' : ''}</option>`
+    ).join('') || '<option value="">(inga mätningar i REW)</option>';
+  } catch (e) { sel.innerHTML = `<option value="">${e}</option>`; }
+}
+async function loadSugList(select) {
+  const sel = $('sugSel');
+  try {
+    const d = await jget('/suggestions');
+    sel.innerHTML = d.files.map(f => `<option>${f}</option>`).join('')
+      || '<option value="">(inga – kör steg 1)</option>';
+    if (select) sel.value = select; else if (d.files.length) sel.selectedIndex = 0;
+  } catch (e) { sel.innerHTML = `<option value="">${e}</option>`; }
+}
 async function loadSug() {
-  say('läser rew_eq_suggestion.json …'); try {
-    const d = await jget('/suggestion'); setEditorGeq(d.geq); setEditorPeq(d.peq);
-    say('REW-förslaget inläst i redigeraren', 'ok');
+  const f = $('sugSel').value;
+  if (!f) return say('inget förslag valt – kör steg 1 först', 'err');
+  say('läser ' + f + ' …');
+  try {
+    const d = await jget('/suggestion?file=' + encodeURIComponent(f));
+    setEditorGeq(d.geq); setEditorPeq(d.peq);
+    setEditorFrom('förslag ' + d.name
+      + (d.generated_at ? ' (' + d.generated_at.slice(0,16).replace('T',' ') + ')' : ''));
+    say(f + ' inläst i redigeraren', 'ok');
   } catch (e) { say(e, 'err'); }
 }
-$('loadSug').onclick = loadSug; $('loadSug2').onclick = loadSug;
-$('flat').onclick = () => { setEditorGeq(BANDS.map(() => 0)); setEditorPeq([null,null,null]); say('redigeringen nollad'); };
+$('loadSug').onclick = loadSug;
+$('loadSug3').onclick = async () => { await loadSugList(); await loadSug(); };
+$('measRefresh').onclick = loadMeasList;
+$('flat').onclick = () => { setEditorGeq(BANDS.map(() => 0)); setEditorPeq([null,null,null]); setEditorFrom('nollad'); say('redigeringen nollad'); };
+$('runStep1').onclick = () => {
+  const v = $('measSel').value;
+  if (!v) { $('cmdline').value = ''; return runCmd(); }
+  const [id, sl] = v.split('|');
+  $('cmdline').value = `--measurement ${id} --output history/suggestions/suggestion-${nowTs()}-${sl}.json --yes`;
+  runCmd();
+};
+$('runRefine').onclick = () => {
+  const v = $('measSel').value, f = $('sugSel').value;
+  if (!v || !f) return alert('välj både en (ny) mätning och det förslag du vill förfina');
+  const sl = v.split('|')[1] || 'matning';
+  $('cmdline').value = `refine --refine-from ${f} --measurement ${v.split('|')[0]}`
+    + ` --output history/suggestions/suggestion-${nowTs()}-${sl}.json`;
+  runCmd();
+};
+loadMeasList(); loadSugList(); loadBaseList();
 
 async function writeDevice() {
-  if (!confirm('Skriva GEQ + PEQ till enheten? Detta skickar en hel minnesdump.')) return;
-  say('skriver och läser tillbaka … (~15 s)'); try {
-    const d = await jpost('/device/write', {geq: getEditorGeq(), peq: getEditorPeq()});
-    if (!d.mismatches.length) say('OK: enheten har exakt det som skrevs. Verifiera akustiskt med en REW-sweep.', 'ok');
-    else say(d.mismatches.length + ' avvikelser: ' + d.mismatches.slice(0,3).join(' · '), 'err');
-    $('read').click();
+  const base = $('baseSel').value;
+  if (!base) return say('välj en bas-dump (eller "Läs av enheten") först', 'err');
+  if (!confirm('Steg 1/3: patcha.\n\nRedigerarens GEQ + PEQ patchas in i basen:\n'
+      + base + '\n\nInget skickas än.')) return;
+  say('steg 1/3: patchar basen …');
+  let prep;
+  try { prep = await jpost('/device/prepare', {base, geq: getEditorGeq(), peq: getEditorPeq()}); }
+  catch (e) { return say(e, 'err'); }
+  say('patchad → ' + prep.applied + ': ' + prep.changes.join(', '), 'ok');
+
+  if (!confirm('Steg 2/3: skicka.\n\n' + prep.applied + '\nÄndringar mot basen: '
+      + prep.changes.join(', ') + '.\n\nTryck + på RCV MEMORY DUMP på enheten NU '
+      + '(mottagningsläge), klicka sedan OK. En push utan mottagningsläge landar inte.')) {
+    return say('avbrutet – inget skickat. Patchad dump: ' + prep.applied + '.', '');
+  }
+  say('steg 2/3: skickar dumpen … (~6 s, rör inte enheten)');
+  try { await jpost('/device/send'); }
+  catch (e) { return say(e, 'err'); }
+
+  if (!confirm('Steg 3/3: verifiera.\n\nDumpen är skickad. Enheten står nu på '
+      + 'RCV MEMORY DUMP-panelen och svarar inte på läsförfrågan därifrån.\n\n'
+      + 'Ställ enheten TILLBAKA på EQ-huvudskärmen, klicka sedan OK så läses '
+      + 'skrivningen tillbaka och jämförs.')) {
+    return say('skickat men inte verifierat. Klicka "Verifiera skrivningen" när '
+      + 'enheten är på EQ-huvudskärmen.', '');
+  }
+  verifyWrite();
+}
+
+async function verifyWrite() {
+  say('läser tillbaka och jämför … (~5 s)');
+  try {
+    const d = await jpost('/device/verify');
+    if (!d.mismatches.length) {
+      say('OK: enheten läser tillbaka exakt det som skrevs (' + (d.applied || 'applied')
+        + '). ' + (d.peq_on ? 'Kolla PEQ-sidan på enheten – läget PAR/AUT/SGL sätts där, inte i dumpen. ' : '')
+        + 'Verifiera akustiskt med en REW-sweep. "Läs av enheten" ger en ny bas för nästa varv.', 'ok');
+    } else {
+      say(d.mismatches.length + ' avvikelser: ' + d.mismatches.slice(0,3).join(' · ')
+        + ' – togs dumpen emot? Tryck RCV MEMORY DUMP + och kör Skriv igen.', 'err');
+    }
   } catch (e) { say(e, 'err'); }
 }
-$('write').onclick = writeDevice; $('write2').onclick = writeDevice;
+$('write').onclick = writeDevice;
+$('verify').onclick = verifyWrite;
 
 // ---- kommandopanel ----
 for (const [title, items] of COMMANDS) {
@@ -379,14 +848,12 @@ for (const [title, items] of COMMANDS) {
     b.onclick = () => { $('cmdline').value = cmd; runCmd(); }; g.append(b);
   }
 }
-document.querySelectorAll('button[data-run]').forEach(b =>
-  b.onclick = () => { $('cmdline').value = b.getAttribute('data-run'); runCmd(); });
 
 async function postCmd(path, body) {
   const r = await fetch(path, {method:'POST', body: JSON.stringify(body)});
   const j = await r.json(); if (j.error) { $('status').textContent = 'fel: ' + j.error; $('status').className = 'err'; } return j;
 }
-const runCmd = () => postCmd('/run', {cmdline: $('cmdline').value});
+const runCmd = () => { $('cmdpanel').open = true; return postCmd('/run', {cmdline: $('cmdline').value}); };
 $('runf').onsubmit = e => { e.preventDefault(); runCmd(); };
 $('stop').onclick = () => postCmd('/stop', {});
 $('inf').onsubmit = e => { e.preventDefault(); postCmd('/stdin', {line: $('line').value}); $('line').value = ''; };
@@ -437,7 +904,14 @@ class Handler(BaseHTTPRequestHandler):
                          "running": bool(proc) and proc.poll() is None}
             self._json(reply)
         elif u.path == "/suggestion":
-            self._device(suggestion)
+            q = parse_qs(u.query)
+            self._device(suggestion, (q.get("file") or [None])[0])
+        elif u.path == "/suggestions":
+            self._device(suggestions)
+        elif u.path == "/bases":
+            self._device(bases)
+        elif u.path == "/measurements":
+            self._device(rew_measurements)
         else:
             self._json({"error": "404"}, 404)
 
@@ -446,6 +920,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(fn(*a))
         except DeviceError as e:
             self._json({"error": str(e)}, 400)
+        except SystemExit as e:                     # rew_to_dsp8000 kastar SystemExit vid t.ex. ingen MIDI-port
+            self._json({"error": str(e) or "avbröt"}, 400)
         except Exception as e:                      # oväntat: visa i GUI:t, krascha inte servern
             self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
@@ -461,6 +937,17 @@ class Handler(BaseHTTPRequestHandler):
                 stop(); self._json({"ok": True})
             elif self.path == "/device/read":
                 self._device(device_read)
+            elif self.path == "/device/read-base":
+                self._device(read_base, body.get("name"))
+            elif self.path == "/device/cc":
+                self._device(device_cc, body.get("idx"), body.get("db"),
+                             body.get("channel", "both"))
+            elif self.path == "/device/prepare":
+                self._device(device_prepare, body.get("base"), body.get("geq", []), body.get("peq", []))
+            elif self.path == "/device/send":
+                self._device(device_send)
+            elif self.path == "/device/verify":
+                self._device(device_verify)
             elif self.path == "/device/write":
                 self._device(device_write, body.get("geq", []), body.get("peq", []))
             else:
@@ -473,6 +960,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port=PORT, open_browser=True):
+    for name in ("reads", "writes", "suggestions"):
+        _dir(name)      # så steg 1 / kommandopanelen kan skriva dit direkt
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"DSP8000 kontrollpanel: http://127.0.0.1:{srv.server_port}/  (Ctrl-C avslutar)")
     if open_browser:

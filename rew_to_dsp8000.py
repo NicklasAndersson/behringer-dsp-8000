@@ -1,10 +1,17 @@
 """
-Steg 2: rew_eq_suggestion.json -> MIDI CC till DSP8000:s grafiska EQ.
+Steg 2: rew_eq_suggestion.json -> DSP8000. Två separata skrivvägar:
 
-Bara den grafiska 31-bands-EQ:n kan skrivas via MIDI (CC). De parametriska
-filtren måste ställas för hand (show_config.py visar dem) - men både GEQ och
-PEQ kan LÄSAS tillbaka ur enhetens minnesdump (readback). MIDI-referens:
-docs/midi.md.
+  * CC, ett band i taget (`send`): skickar de 31 grafiska banden som var sitt
+    Control Change. Snabbt och inkrementellt, men bara GEQ, och enheten tappar
+    meddelanden om de kommer i en klump (`send --verify` läser tillbaka och
+    säger till). Rör inte PEQ.
+  * Hel minnesdump (`apply` / `push`): patchar enhetens dump med GEQ *och* PEQ
+    och pushar tillbaka i ett svep (RCV MEMORY DUMP). Atomiskt, allt-eller-
+    inget, skriver båda. `roundtrip` är det fristående hårdvarutestet av den
+    här vägen.
+
+Både GEQ och PEQ kan LÄSAS tillbaka ur enhetens minnesdump (`readback`).
+MIDI-referens: docs/midi.md.
 
 CC->dB-skalan (dsp8000.db_to_cc, CC = 64 + dB*4) är verifierad mot
 testenheten 2026-09-02. Kör `calibrate` en gång om du har en annan enhet.
@@ -23,6 +30,7 @@ Användning:
     python rew_to_dsp8000.py probe [--manual]    # dumpa, ändra en sak, dumpa, diffa
     python rew_to_dsp8000.py push [--send-only] FIL.syx   # skicka en dump till enheten (RCV-test)
     python rew_to_dsp8000.py apply [--dry-run] [--base FIL]  # patcha en dump med JSON:en (GEQ+PEQ) och pusha
+    python rew_to_dsp8000.py roundtrip [--keep]  # hårdvarutest: skriv känt GEQ+PEQ-mönster via dump, läs tillbaka, återställ
     python rew_to_dsp8000.py calibrate           # interaktiv kalibrering
     python rew_to_dsp8000.py send --dry-run      # visa vad som skulle skickas
     python rew_to_dsp8000.py send                # skicka på riktigt (frågar först)
@@ -40,6 +48,7 @@ except ImportError:  # fit_scale m.m. är ren matte; bara MIDI-kommandona behöv
     mido = None
 
 import dsp8000
+import paths
 import syx_tools
 
 JSON_FILE = Path("rew_eq_suggestion.json")
@@ -87,7 +96,8 @@ def monitor(seconds=30):
                 n += 1
                 if m.type == "sysex":
                     d = bytes(m.data)
-                    out = Path(f"dsp8000_sysex_{len(d)}_{time.strftime('%H%M%S')}.syx")
+                    out = paths.new(paths.CAPTURES,
+                                    f"monitor-{len(d)}b-{time.strftime('%H%M%S')}.syx")
                     out.write_bytes(b"\xf0" + d + b"\xf7")
                     print(f"  SysEx {len(d)}b -> {out}  (header {list(d[:9])})")
                     for line in geq_status_lines(d):
@@ -219,11 +229,12 @@ def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
         via MIDI. Enheten hamnar inte tillbaka automatiskt."""
     ts = time.strftime("%H%M%S")
     if manual:
-        before_f, after_f = Path(f"probe_manual_before_{ts}.syx"), Path(f"probe_manual_after_{ts}.syx")
+        before_f = paths.new(paths.CAPTURES, f"probe-manual-before-{ts}.syx")
+        after_f = paths.new(paths.CAPTURES, f"probe-manual-after-{ts}.syx")
     else:
         cc_num = cc_map(channel)[band_freq]
-        before_f = Path(f"probe_{band_freq:g}Hz_{channel}_before_{ts}.syx")
-        after_f = Path(f"probe_{band_freq:g}Hz_{channel}_after_cc{value}_{ts}.syx")
+        before_f = paths.new(paths.CAPTURES, f"probe-{band_freq:g}Hz-{channel}-before-{ts}.syx")
+        after_f = paths.new(paths.CAPTURES, f"probe-{band_freq:g}Hz-{channel}-after-cc{value}-{ts}.syx")
     with open_output() as out, open_input() as inp:
         before = _grab_with_retry(out, inp, "Dump 1/2 (före)")
         if manual:
@@ -270,7 +281,7 @@ def push(path, send_only=False):
           "  - enheten på EQ-huvudskärmen")
     input("Enter när allt stämmer (Ctrl-C avbryter): ")
     ts = time.strftime("%H%M%S")
-    before_f = Path(f"probe_push_before_{ts}.syx")
+    before_f = paths.new(paths.READS, f"push-before-{ts}.syx")
     before = after = None
     with open_output() as out:
         inp = None if send_only else open_input()
@@ -279,9 +290,9 @@ def push(path, send_only=False):
                 before = _grab_with_retry(out, inp, "Dump 1/2 (före)")
                 before_f.write_bytes(b"\xf0" + before + b"\xf7")
                 print(f"  återställningspunkt: {before_f}  (push den om något gick fel)")
-            print("\nVill du testa knappvägen: tryck + på RCV MEMORY DUMP på enheten NU, "
-                  "innan du svarar. Annars låt bli.")
-            if input(f"Skicka {len(b)} byte till enheten? (ja/nej): ").strip().lower() != "ja":
+            print("\nSätt enheten i mottagningsläge: tryck + på RCV MEMORY DUMP NU "
+                  "(en push utan knapptryck landade inte, docs/midi.md avsnitt 4).")
+            if input(f"Klar? Skicka {len(b)} byte till enheten? (ja/nej): ").strip().lower() != "ja":
                 raise SystemExit("Avbrutet." + (f" Före-dumpen finns i {before_f}." if before else ""))
             out.send(mido.Message("sysex", data=list(b[1:-1])))
             print(f"  skickade {len(b)} byte, väntar 6 s (12 kB @ 31250 baud ≈ 4 s)...")
@@ -294,7 +305,7 @@ def push(path, send_only=False):
         finally:
             if inp:
                 inp.close()
-    Path(f"probe_push_after_{ts}.syx").write_bytes(b"\xf0" + after + b"\xf7")
+    paths.new(paths.READS, f"push-after-{ts}.syx").write_bytes(b"\xf0" + after + b"\xf7")
     _report_dump_diff(before, after)
     print("\nKolla också displayen: ändrades GEQ/PEQ där? Anteckna utfallet enligt "
           "docs/midi.md avsnitt 4 (testprotokollet) och 7 (testloggen).")
@@ -338,7 +349,8 @@ def sysex_probe(write_test=False):
             replies = [bytes(m.data) for m in _collect(inp) if m.type == "sysex"]
             for d in replies:
                 hit = True
-                f = Path(f"dsp8000_sysex_reply_{len(d)}_{time.strftime('%H%M%S')}.syx")
+                f = paths.new(paths.CAPTURES,
+                              f"sysex-reply-{len(d)}b-{time.strftime('%H%M%S')}.syx")
                 f.write_bytes(b"\xf0" + d + b"\xf7")
                 print(f"  SVAR {len(d)}b  head {d[:12].hex(' ')}…  -> {f}")
             if not replies:
@@ -479,7 +491,7 @@ def apply(base_path=None, dry_run=False):
         print(f"Bas: färsk dump från enheten ({len(base)} byte, sub-kod {base[6]:02x} {base[7]:02x}).")
 
     patched = syx_tools.patch_dump(base, geq_L=geq, geq_R=geq, peqs=peqs)
-    out_f = Path("dsp8000_applied.syx")
+    out_f = paths.new(paths.WRITES, f"applied-{paths.ts()}.syx")
     out_f.write_bytes(patched)
     print(f"\nPatchad dump -> {out_f}. Ändringar mot basen:")
     _report_dump_diff(base[1:-1], patched[1:-1])
@@ -491,7 +503,9 @@ def apply(base_path=None, dry_run=False):
     print("\nChecklista: båda MIDI-kablarna i, MIDI ON, EXCL RCV + SND ON, "
           "PROTECT MEM av, enheten på EQ-huvudskärmen.")
     input("Enter när allt stämmer (Ctrl-C avbryter): ")
-    if input(f"Skriva {out_f} till enheten? (ja/nej): ").strip().lower() != "ja":
+    print("Sätt enheten i mottagningsläge: tryck + på RCV MEMORY DUMP "
+          "(en push utan knapptryck landade inte, docs/midi.md avsnitt 4).")
+    if input(f"Klar? Skriva {out_f} till enheten? (ja/nej): ").strip().lower() != "ja":
         raise SystemExit(f"Avbrutet. Den patchade dumpen finns i {out_f}.")
     with open_output() as out, open_input() as inp:
         out.send(mido.Message("sysex", data=list(patched[1:-1])))
@@ -502,7 +516,8 @@ def apply(base_path=None, dry_run=False):
 
 
 def _verify_applied(want, got):
-    """Jämför GEQ + PEQ i den skickade (want) och den återlästa (got) dumpen."""
+    """Jämför GEQ + PEQ i den skickade (want) och den återlästa (got) dumpen.
+    Returnerar listan med avvikelser (tom = allt landade)."""
     gw, gg = syx_tools.decode_geq(want), syx_tools.decode_geq(got)
     pw, pg = syx_tools.decode_peq(want), syx_tools.decode_peq(got)
     bad = []
@@ -521,6 +536,120 @@ def _verify_applied(want, got):
               "(prova --base med en knapp-dump i 4F 12-format, docs/midi.md avsnitt 4):")
         for line in bad[:20]:
             print("  " + line)
+    return bad
+
+
+def roundtrip(keep=False, base_path=None):
+    """Fristående hårdvarutest av dump-skrivvägen (RCV MEMORY DUMP). Bevisar att
+    både GEQ och PEQ går att sätta via en pushad minnesdump. Rör varken
+    rew_eq_suggestion.json eller CC.
+
+    Flöde: säkerhetskopiera enhetens läge -> patcha in ett känt, asymmetriskt
+    testmönster (L och R olika, så en L/R-förväxling syns) -> pusha -> läs
+    tillbaka och jämför bit för bit -> pusha tillbaka säkerhetskopian och
+    bekräfta att inget blev kvar. --keep: hoppa återställningen (mönstret ligger
+    kvar, återställ med `push <backup>`).
+
+    Enheten måste sättas i mottagningsläge med knappen RCV MEMORY DUMP (+) precis
+    innan dumpen skickas - skriptet pausar och säger till. (Utan knapptryck och
+    med förfrågnings-formatet `4F 0A` landade inget, 2026-09-03.)
+
+    --base FIL: patcha en sparad dump i stället för en färsk från enheten, t.ex.
+    en knapp-dump i `4F 12`-format (fånga med `monitor` + SND MEMORY DUMP) om
+    `4F 0A` visar sig inte fungera ens med knappen. Säkerhetskopian pushas ändå
+    tillbaka för att återställa; kommer `--base` från en annan enhet: kör inte det här."""
+    geq_L = [dsp8000.clamp_band_gain(-8 + 0.5 * i, max_boost=16) for i in range(31)]
+    geq_R = [dsp8000.clamp_band_gain(8 - 0.5 * i, max_boost=16) for i in range(31)]
+    peq3 = [{"freq_hz": 63.0, "bw_oct": 1 / 3, "gain_db": -6.0},
+            {"freq_hz": 250.0, "bw_oct": 0.5, "gain_db": 3.0},
+            {"freq_hz": 1000.0, "bw_oct": 1.0, "gain_db": -4.0}]
+    peqs = [rec for rec in peq3 for _ in (0, 1)]   # L1 R1 L2 R2 L3 R3, samma L/R
+
+    print("Roundtrip-test av dump-skrivvägen. Skriver GEQ + PEQ via en pushad "
+          "minnesdump, rör inte CC eller JSON.")
+    print("Testmönster: GEQ L -8..+7 dB, R +8..-7 dB (rampar åt var sitt håll); "
+          "PEQ 63 Hz/-6 dB, 250 Hz/+3 dB, 1 kHz/-4 dB.")
+    print("\nChecklista: båda MIDI-kablarna i, MIDI ON, EXCL RCV + SND ON, "
+          "PROTECT MEM av, enheten på EQ-huvudskärmen.")
+    input("Enter när allt stämmer (Ctrl-C avbryter): ")
+
+    ts = time.strftime("%H%M%S")
+    backup_f = paths.new(paths.READS, f"roundtrip-backup-{ts}.syx")
+    with open_output() as out, open_input() as inp:
+        base = b"\xf0" + _grab_with_retry(out, inp, "Säkerhetskopierar enhetens läge") + b"\xf7"
+        backup_f.write_bytes(base)
+        print(f"  återställningspunkt: {backup_f}  (pushas alltid tillbaka på slutet)")
+
+        if base_path:
+            src = syx_tools.load(base_path)
+            if not syx_tools.is_memory_dump(src):
+                raise SystemExit(f"{base_path}: inte en minnesdump.")
+            print(f"  patch-bas: {base_path}  (sub-kod {src[7]:02x} {src[8]:02x})")
+        else:
+            src = base
+        fmt = "knapp (4F 12)" if src[7] == 0x12 else f"förfrågan (4F {src[7]:02x})"
+        print(f"  patchdumpens format: {fmt}")
+        if src[7] != 0x12:
+            print("  VARNING: testenheten svalde inte 4F 0A-formatet (docs/midi.md "
+                  "avsnitt 4). Om det inte landar: kör om med --base <knapp-dump.syx> "
+                  "(monitor + SND MEMORY DUMP).")
+
+        patched = syx_tools.patch_dump(src, geq_L=geq_L, geq_R=geq_R, peqs=peqs)
+        test_f = paths.new(paths.WRITES, f"roundtrip-test-{ts}.syx")
+        test_f.write_bytes(patched)
+        print(f"\nPatchad testdump -> {test_f}. Ändringar mot patch-basen:")
+        _report_dump_diff(src[1:-1], patched[1:-1])
+
+        print("\nSätt enheten i mottagningsläge NU: tryck + på RCV MEMORY DUMP.")
+        if input(f"Klar? Skriva testmönstret ({len(patched)} byte)? (ja/nej): ").strip().lower() != "ja":
+            raise SystemExit(f"Avbrutet, enheten orörd. Säkerhetskopia: {backup_f}.")
+        out.send(mido.Message("sysex", data=list(patched[1:-1])))
+        print(f"  skickade {len(patched)} byte, väntar 6 s...")
+        time.sleep(6)
+        got = b"\xf0" + _grab_with_retry(out, inp, "Läser tillbaka testmönstret") + b"\xf7"
+        bad = _verify_applied(patched, got)
+        landed = not bad and syx_tools.decode_geq(got) != syx_tools.decode_geq(base)
+
+        if keep and bad:
+            print(f"\n--keep men inget landade - enheten är sannolikt orörd. "
+                  f"Säkerhetskopia: {backup_f}.")
+            return
+        if keep:
+            print(f"\n--keep: testmönstret ligger kvar på enheten. "
+                  f"Återställ med: ./run.sh push {backup_f}")
+            return
+        print("\nÅterställer enhetens läge. Tryck + på RCV MEMORY DUMP IGEN "
+              "(även återställningen är en push och behöver mottagningsläget).")
+        input("  Enter när enheten är i mottagningsläge: ")
+        out.send(mido.Message("sysex", data=list(base[1:-1])))
+        print("  skickade backupen, väntar 6 s...")
+        time.sleep(6)
+        restored = b"\xf0" + _grab_with_retry(out, inp, "Läser tillbaka efter återställning") + b"\xf7"
+
+    print("\nÅterställning:")
+    _report_dump_diff(base[1:-1], restored[1:-1])
+    if syx_tools.decode_geq(restored) != syx_tools.decode_geq(base):
+        print(f"  OBS: återställningen tog inte - kör: ./run.sh push {backup_f} "
+              "(och tryck + på RCV MEMORY DUMP).")
+
+    if not bad and landed:
+        verdict = ("GEQ + PEQ-VÄRDEN via dump: FUNGERAR (enheten läser tillbaka exakt "
+                   "det som skrevs). Om PEQ-filtren faktiskt bearbetar ljudet beror på "
+                   "PEQ-läget (PAR/AUT/SGL) som INTE ligger i dumpen - kolla PEQ-sidan "
+                   "på displayen eller kör en REW-sweep (63/250/1k ska synas).")
+    elif not bad:
+        verdict = ("GEQ + PEQ via dump: OKLART - återläsningen matchar men den "
+                   "matchar också utgångsläget (testmönstret kanske inte behövdes).")
+    else:
+        b0 = syx_tools.decode_geq(base)
+        unchanged = all(b0[c] == syx_tools.decode_geq(got)[c] for c in ("L", "R"))
+        why = ("återläsningen är oförändrad utgångsdata - dumpen togs inte emot. "
+               "Tryck + på RCV MEMORY DUMP innan du svarar ja, eller kör --base "
+               "med en 4F 12-knapp-dump."
+               if unchanged else "enheten tog emot något men inte det som skrevs.")
+        verdict = f"GEQ + PEQ via dump: MISSLYCKADES ({len(bad)} avvikelser). {why}"
+    print(f"\n{verdict}\nSäkerhetskopia kvar i {backup_f}. "
+          "Anteckna utfallet i docs/midi.md avsnitt 7 (testloggen).")
 
 
 def fit_scale(readings):
@@ -592,6 +721,11 @@ def main():
                      help="patcha och spara dsp8000_applied.syx, pusha inte")
     ap_.add_argument("--base", metavar="FIL",
                      help="patcha en sparad dump i stället för en färsk från enheten")
+    rt = sub.add_parser("roundtrip")
+    rt.add_argument("--keep", action="store_true",
+                    help="lämna testmönstret kvar på enheten i stället för att återställa")
+    rt.add_argument("--base", metavar="FIL",
+                    help="patcha en sparad dump (t.ex. en 4F 12-knapp-dump) i stället för en färsk")
     for name in ("send", "calibrate"):
         sp = sub.add_parser(name)
         sp.add_argument("--midi-channel", type=int, default=1, choices=range(1, 17),
@@ -628,6 +762,8 @@ def main():
                    restore=None if args.no_restore else 64, manual=args.manual)
     elif args.cmd == "apply":
         apply(args.base, args.dry_run)
+    elif args.cmd == "roundtrip":
+        roundtrip(args.keep, args.base)
     elif args.cmd == "send":
         send(args.channel, args.midi_channel, args.dry_run, args.verify)
     elif args.cmd == "calibrate":

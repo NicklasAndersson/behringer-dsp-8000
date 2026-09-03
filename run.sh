@@ -10,6 +10,7 @@ REW -> DSP8000 (steg 1, rew_script.py):
   ./run.sh                        mät i REW, kör Match target, spara rew_eq_suggestion.json (frågar först)
   ./run.sh --no-peq               hoppa parametriska filter, bara 31-bands grafisk EQ
   ./run.sh --measurement ID       välj REW-mätning direkt i stället för att fråga
+  ./run.sh --output FIL           skriv förslaget till FIL i st f rew_eq_suggestion.json
   ./run.sh --yes                  fråga inte, kör Match target direkt
   ./run.sh refine [flaggor]       andra varvet (mätning MED EQ:n på): --refine --yes + flaggorna vidare
   ./run.sh target                 visa REW:s riktiga target-settings-fältnamn (--show-target)
@@ -25,6 +26,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh grab FIL.syx           hämta en dump och spara (bygg bibliotek av kända tillstånd)
   ./run.sh push [--send-only] FIL.syx  skicka en dump till enheten (RCV MEMORY DUMP-test, protokoll i docs/midi.md avsnitt 4)
   ./run.sh apply [--dry-run]      patcha enhetens dump med rew_eq_suggestion.json (GEQ+PEQ) och pusha tillbaka
+  ./run.sh roundtrip [--keep]     hårdvarutest av dump-vägen: skriv känt GEQ+PEQ-mönster, läs tillbaka, återställ
   ./run.sh probe [--band N --value CC]  dumpa, sätt ett band via CC, dumpa, diffa
   ./run.sh probe --manual         dumpa, pausa medan du ändrar PEQ/delay på enheten, dumpa, diffa
   ./run.sh calibrate              kalibrera CC->dB mot enhetens display, en gång per enhet
@@ -33,7 +35,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
 
 Övrigt:
   ./run.sh gui                    webb-kontrollpanel: läs/redigera GEQ+PEQ, REW-flöde, kommandopanel (http://127.0.0.1:8765)
-  ./run.sh show                   generera + öppna dsp8000_config.html ur rew_eq_suggestion.json
+  ./run.sh show [--input FIL]     config-HTML (history/config/) ur ett EQ-förslag (default rew_eq_suggestion.json)
   ./run.sh test                   självtester, kräver varken REW, mido eller enheten
   ./run.sh help                   den här listan
 
@@ -51,7 +53,7 @@ fi
 .venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
 
 case "$1" in
-  ports|monitor|sysex|readback|grab|push|apply|probe|calibrate|send)
+  ports|monitor|sysex|readback|grab|push|apply|roundtrip|probe|calibrate|send)
     exec .venv/bin/python rew_to_dsp8000.py "$@" ;;
   gui)
     shift; exec .venv/bin/python run_gui.py "$@" ;;

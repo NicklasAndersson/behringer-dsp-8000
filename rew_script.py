@@ -44,6 +44,7 @@ import math
 import struct
 import time
 from datetime import datetime
+from pathlib import Path
 
 import requests
 
@@ -311,6 +312,7 @@ def load_previous_output(path=OUTPUT_FILE):
 
 
 def save_output(measurement, filters, band_gains, path=OUTPUT_FILE):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)   # t.ex. history/suggestions/
     with open(path, "w", encoding="utf-8") as f:
         json.dump({
             "generated_at": datetime.now().isoformat(),
@@ -352,6 +354,13 @@ def main():
                          f"till bandvärdena i {OUTPUT_FILE} (PEQ-listan följer med)")
     ap.add_argument("--measurement", metavar="ID",
                     help="REW:s mätnings-id (nyckeln i GET /measurements) i stället för att fråga")
+    ap.add_argument("--output", metavar="FIL", default=OUTPUT_FILE,
+                    help=f"skriv förslaget hit i stället för {OUTPUT_FILE}. GUI:t sätter "
+                         "history/suggestion-<tid>-<mätning>.json så varje körning ligger "
+                         "kvar tidsstämplad.")
+    ap.add_argument("--refine-from", metavar="FIL",
+                    help="--refine: läs föregående förslag härifrån (--output är ändå "
+                         "vart det nya skrivs). Utan flaggan läses/skrivs --output.")
     ap.add_argument("--yes", "-y", action="store_true",
                     help="fråga inte, kör Match target via API direkt")
     ap.add_argument("--show-target", action="store_true",
@@ -389,14 +398,17 @@ def main():
     if args.refine:
         # Enhetens EQ (grafisk + ev. PEQ) sitter redan i mätningen: räkna
         # residualen mot rå respons och lägg den ovanpå förra bandvärdena.
-        prev_filters, base = load_previous_output()
-        print(f"Refine: utgår från {len(base)} band + {len(prev_filters)} PEQ i {OUTPUT_FILE}.")
+        src = args.refine_from or args.output
+        prev_filters, base = load_previous_output(src)
+        print(f"Refine: utgår från {len(base)} band + {len(prev_filters)} PEQ i {src}"
+              + (f", skriver {args.output}." if args.output != src else "."))
         api_post(f"/measurements/{measurement_id}/equaliser",
                  {"manufacturer": "Generic", "model": "Generic"})
         set_target_settings(measurement_id, target_overrides)
         eq_command(measurement_id, "Calculate target level")
         save_output(measurement, prev_filters,
-                    graphic_band_gains(measurement_id, after_peq=False, base=base))
+                    graphic_band_gains(measurement_id, after_peq=False, base=base),
+                    path=args.output)
         return
 
     if args.yes or input("Kör Match target via API nu? (j/n): ").strip().lower().startswith("j"):
@@ -416,7 +428,8 @@ def main():
         filters = keep_top_filters(measurement_id, filters)
     # after_peq=False läser rå /frequency-response -> struntar i ev. gamla filter
     save_output(measurement, filters,
-                graphic_band_gains(measurement_id, after_peq=not args.no_peq))
+                graphic_band_gains(measurement_id, after_peq=not args.no_peq),
+                path=args.output)
 
 
 if __name__ == "__main__":

@@ -21,8 +21,8 @@ USB som MIDI-interface. Det som *inte* är testat står uttryckligen markerat.
 | SND MEMORY DUMP (knapp) → hela minnesdumpen | DSP → dator | **fungerar** |
 | Fader-rörelse → läsbar GEQ-status (`33 09`) | DSP → dator | **fungerar** |
 | Läsa GEQ + PEQ ur dumpen | – | **avkodat** (`syx_tools.py eq`, `rew_to_dsp8000.py readback`) |
-| RCV MEMORY DUMP (ladda en dump tillbaka) | dator → DSP | **fungerar** (2026-09-03) – hela minnet skrivs genom att pusha en dump. `push` / `apply` |
-| Skriva PEQ (+ GEQ, master, program) via dump | dator → DSP | **fungerar** – patcha en dump och pusha (`apply`). Delay/gate/limiter: samma väg, men de bitfälten är inte kartlagda |
+| RCV MEMORY DUMP (ladda en dump tillbaka) | dator → DSP | **fungerar med knapptryck** – tryck + på RCV MEMORY DUMP precis före sändning; utan det landar inget (2026-09-03). `push` / `apply` / `roundtrip`, avsnitt 4 |
+| Skriva GEQ + PEQ via dump | dator → DSP | **verifierat** (`roundtrip` 2026-09-03: ramp + 3 PEQ-filter skrevs och lästes tillbaka exakt). PEQ-*läget* (PAR/AUT/SGL) ligger dock inte i dumpen. Master/delay/gate/limiter: samma väg, bitfälten inte kartlagda |
 | ADRStudio:s granulära DSP8024-SysEx | – | **dött** på DSP8000 (bilaga A) |
 
 Returvägen kräver **båda** MIDI-kablarna (interface OUT → DSP IN *och*
@@ -86,7 +86,7 @@ Så här hänger de ihop, och vad som är verifierat:
 | EXCL **RCV** | in | Enheten tar emot SysEx | **verifierad**: `70`-förfrågan besvaras |
 | EXCL **SND** | ut | Enheten skickar SysEx | **verifierad**: dump + fader-frame `33 09` |
 | SND MEMORY DUMP | ut | Hela minnet som `4F 12`-dump | **verifierad** |
-| RCV MEMORY DUMP | in | Laddar en dump från MIDI IN tillbaka i minnet | **verifierad** (2026-09-03) – enheten tog emot en pushad dump med EXCL RCV ON, utan att trycka på knappen. Avsnitt 4 |
+| RCV MEMORY DUMP | in | Laddar en dump från MIDI IN tillbaka i minnet | **fungerar** – tryck + på knappen precis före sändning. Utan knapptryck landar inget (2026-09-03). Avsnitt 4 |
 
 Praktiskt: för skriptkedjan räcker `CNTL RCV = 0`, `PROG RCV ON`, `EXCL RCV +
 SND ON`. `CNTL SND` behövs bara om du vill se fader-rörelser i `monitor`.
@@ -95,46 +95,65 @@ att inte controller-ekon nollställer något – det problemet har vi inte sett.
 
 ---
 
-## 4. RCV MEMORY DUMP – skriva hela minnet (fungerar)
+## 4. RCV MEMORY DUMP – skriva hela minnet (fungerar med knapptryck)
 
-**Bekräftat 2026-09-03:** enheten tar emot en hel minnesdump på MIDI IN och
-lägger in den. Det är vägen till att skriva allt som CC inte når – de 6
-parametriska filtren i första hand, men också GEQ, master och de 100 programmen.
-GEQ- och PEQ-blocken är avkodade (avsnitt 6.4), så vi kan patcha en dump och
-pusha tillbaka den. Det är precis vad `apply` gör (se avsnitt 5b och `readme.md`).
+Vägen till att skriva allt som CC inte når – de 6 parametriska filtren i första
+hand, men också GEQ, master och de 100 programmen. GEQ- och PEQ-blocken är
+avkodade (avsnitt 6.4), så vi kan patcha en dump och pusha tillbaka den (`apply`
+/ `roundtrip`, avsnitt 5b).
 
-**Så här beter sig testenheten:**
+**Status (`roundtrip` 2026-09-03):**
 
-- **EXCL RCV ON räcker.** Dumpen togs emot utan att trycka `+` på RCV MEMORY
-  DUMP-knappen först.
-- **Format `4F 12` (knapp-dump) fungerar** – det var formatet på filen som
-  skrevs. Om `4F 0A` (förfrågnings-format, som `grab`/`apply` hämtar) skulle
-  visa sig inte accepteras: patcha en knapp-dump i stället (`apply --base
-  KNAPPDUMP.syx`, hämtad med `monitor` + SND MEMORY DUMP). `apply` läser
-  tillbaka efteråt och säger till om något inte landade.
-- Enheten är **långsam att svara** direkt efter en inkommande dump – `apply`
-  och `push` väntar 6 s, och `_grab_with_retry` låter dig trycka Enter för ett
-  nytt försök om återläsningen dröjer.
+- **Kräver knappen RCV MEMORY DUMP (+).** En push med **bara** EXCL RCV ON, utan
+  knapptryck, landade **inte** (återläsningen var oförändrad utgångsdata). Med
+  ett tryck på `+` precis före sändningen tog enheten emot dumpen och läste
+  tillbaka exakt det som skrevs, GEQ **och** PEQ. `roundtrip`/`apply`/`push`
+  pausar och säger till innan de skickar; även återställningen (en push) behöver
+  knapptryck.
+- **Format:** `4F 0A` (grabbens förfrågnings-format) duger – det var formatet i
+  det lyckade testet. `roundtrip --base KNAPPDUMP.syx` / `apply --base …` finns
+  om en enhet skulle vara kräsen och bara ta `4F 12`.
+- Enheten är **långsam att svara** direkt efter en inkommande dump – skripten
+  väntar 6 s, och `_grab_with_retry` låter dig trycka Enter för nytt försök.
 
-**Fortfarande inte fastställt** (påverkar inte `apply`, men bra att veta):
+**Fortfarande inte fastställt:**
 
-1. Arbetsbuffert kontra programminne: syns en pushad dump direkt på displayen,
-   eller först efter Program Change? (`apply` patchar en färsk dump, så
-   arbetsbufferten bevaras oavsett.)
-2. Finns en checksumma? De 9 bytena vid data-offset 39–47 (och igen vid
-   199–207) är satta i `4F 12`-dumpar men noll i `4F 0A` (avsnitt 6.3). Eftersom
-   `apply` utgår från en *befintlig* dump och bara ändrar GEQ/PEQ-bitarna följer
-   de här bytena med orörda – en ev. checksumma över resten stämmer då fortfarande.
-3. Blockerar PROTECT MEM? (Ha det av vid skrivning.)
+1. PEQ-läget PAR/AUT/SGL ligger inte i dumpen (6.4) – bearbetar filtren ljudet
+   efter en dump-skrivning, eller måste läget sättas för hand? Kolla PEQ-sidan
+   eller kör en REW-sweep.
+2. Arbetsbuffert kontra programminne: syns en pushad dump direkt på displayen,
+   eller först efter Program Change? (Readback läser arbetsbufferten och den
+   stämde, så åtminstone den skrivs.)
+3. Finns en checksumma? De 9 bytena vid data-offset 39–47 (och igen vid
+   199–207) är satta i `4F 12`-dumpar men noll i `4F 0A` (avsnitt 6.3). `apply`
+   /`roundtrip` utgår från en *befintlig* dump och ändrar bara GEQ/PEQ-bitarna,
+   så de här bytena följer med orörda från patch-basen.
+4. Blockerar PROTECT MEM? (Ha det av vid skrivning.)
+5. **Sub-koden i `4F`-svaret varierar:** `4F 0A 40` respektive `4F 04 40` har
+   båda setts på `70`-förfrågan (samma enhet, olika tillfällen). Byte 7 verkar
+   bära enhetsstatus, inte format – oklart vad `04` vs `0A` betyder. En patchad
+   dump pushar tillbaka headern orörd. Grabbas basen medan enheten *inte* står
+   rent på EQ-huvudskärmen (t.ex. direkt efter en tidigare push) kan även
+   områden utanför GEQ/PEQ vara skeva, och då pushas de skeva värdena tillbaka.
+   Därför: ta basen som en **egen, ren avläsning** och patcha *den*. GUI:t sparar
+   varje avläsning som `history/reads/read-<tid>.syx` och skrivningen väljer
+   den explicit; för CLI: `apply --base history/reads/read-<tid>.syx`.
 
 **Risk:** en pushad dump skriver över arbetsbufferten och kan röra de 100
-programmen. `apply`/`push` sparar alltid en före-dump (`probe_push_before_*` /
+programmen. `apply`/`push` sparar alltid en före-dump (`history/reads/push-before-*` /
 en färsk bas) som återställningspunkt. Använd bara dumpar från **samma** enhet.
 Ta gärna en extra backup först: `./run.sh grab dumps/backup.syx`.
 
-**Verifieringssteg** (om du vill återupprepa RCV-testet från grunden):
-`./run.sh readback` (notera läget) → `./run.sh push dumps/dsp8000_sysex_0db.syx`
-(0 dB skiljer sig från allt annat, så diffen blir tydlig) → kolla displayen och
+**Verifieringssteg:** `./run.sh roundtrip` gör hela testet – säkerhetskopierar
+enhetens läge, patchar in ett känt GEQ+PEQ-mönster (L och R rampar åt var sitt
+håll, 3 PEQ-filter med kända värden), pausar för RCV MEMORY DUMP-knappen, pushar,
+läser tillbaka och jämför bit för bit, pushar sedan tillbaka säkerhetskopian.
+`--keep` hoppar återställningen, `--base FIL` patchar en sparad knapp-dump.
+Skriptet säger själv till om mönstret landade, inte landade, eller om
+återläsningen är tvetydig.
+
+Vill du köra det för hand: `./run.sh readback` (notera läget) → tryck + på RCV
+MEMORY DUMP → `./run.sh push dumps/dsp8000_sysex_0db.syx` → kolla displayen och
 kör `readback` igen. `push --send-only` mot en loopback (interface OUT → IN,
 `monitor` i ett annat fönster) bekräftar att interfacet klarar 12 kB SysEx.
 
@@ -184,7 +203,7 @@ EQ, till skillnad från `send` (CC, bara GEQ):
 2. patchar in de 31 GEQ-banden och upp till 3 PEQ-filter ur
    `rew_eq_suggestion.json` (samma kurva och filter på L och R – mätningen är
    L+R kombinerad), via `syx_tools.patch_dump`;
-3. sparar resultatet som `dsp8000_applied.syx` och visar diffen mot basen;
+3. sparar resultatet som `history/writes/applied-<tid>.syx` och visar diffen mot basen;
 4. pushar dumpen och läser tillbaka för att bekräfta att GEQ + PEQ landade.
 
 `apply --dry-run` gör steg 1–3 utan att skriva (med `--base` behövs ingen enhet
@@ -192,6 +211,12 @@ alls). Kodningen är inversen av avkodningen i avsnitt 6.4: GEQ-värde =
 `db_to_cc(dB) − 64`, PEQ `fr/bw/g` enligt formlerna där, allt inskrivet MSB-först
 i den 7-bit-packade strömmen så byten förblir < 128. Master rörs inte (skalan
 inte verifierad).
+
+**Skilj på de två skrivvägarna:** `send` (CC, ett band i taget) och dump-pushen
+(`apply` / `push` / `roundtrip`) är olika mekanismer. CC är inkrementellt men
+bara GEQ och kan tappa meddelanden; dumpen är atomisk och skriver GEQ + PEQ men
+skriver över hela minnesbilden. `roundtrip` testar bara dump-vägen; `send
+--verify` är motsvarigheten för CC-vägen.
 
 ---
 
@@ -324,11 +349,32 @@ felnamngiven capture – och är borttagen.)
   `_ondemand` vs `_0db` skiljer 84 byte i fil-offset 7–218.
 
 **2026-09-03**
-- **RCV MEMORY DUMP bekräftad:** en pushad `4F 12`-dump togs emot med bara
-  EXCL RCV ON (ingen knapptryckning). Se avsnitt 4.
 - `syx_tools.patch_dump` + `rew_to_dsp8000.py apply`: patcha GEQ + PEQ in i
   en färsk dump och pusha tillbaka. Round-trip (patcha → avkoda) verifierad
-  i `test_rew_script.py`; skrivningen mot enheten läses tillbaka av `apply`.
+  i `test_rew_script.py`.
+- **`roundtrip` mot enheten:**
+  - Försök 1, **ingen knapptryckning**: patchade en färsk `4F 0A`-dump
+    (GEQ-ramp L −8..+7 / R +8..−7, 3 PEQ) och pushade med bara EXCL RCV ON.
+    Återläsningen: 68 avvikelser, GEQ + PEQ oförändrat utgångsläge → dumpen togs
+    inte in.
+  - Försök 2, **+ på RCV MEMORY DUMP** precis före sändningen: `_verify_applied`
+    → "enheten har exakt det som skrevs (GEQ + PEQ)". **Både** GEQ-rampen och de
+    3 PEQ-filtren (63/−6, 250/+3, 1k/−4) lästes tillbaka exakt. Dump-skrivvägen
+    fungerar med knapptryck, `4F 0A`-formatet (grabben) duger.
+  - Återställningen behöver också knapptryck – `roundtrip` pausar nu för det.
+  - Slutsats: den tidigare noteringen "RCV bekräftad utan knapp" var fel.
+- **Öppet:** PEQ-*värden* landar och läses tillbaka, men läget PAR/AUT/SGL ligger
+  inte i dumpen (6.4). Om filtren faktiskt bearbetar ljudet efter en dump-skrivning,
+  eller om läget måste sättas för hand, är inte avgjort – kolla PEQ-sidan på
+  displayen eller kör en REW-sweep.
+- **IN/OUT blinkade rött efter en GUI-skrivning** trots att EQ:n bara innehöll
+  sänkningar (rött = intern overflow/clipping, inte EQ-matematik). Basdumpen i det
+  fallet hade header `4F 04` (inte `4F 0A`) – grabbad medan enheten inte stod rent
+  på EQ-skärmen, så något utanför GEQ/PEQ pushades tillbaka skevt. Åtgärd: GUI:t
+  läser nu enheten i ett eget steg och sparar varje avläsning tidsstämplat
+  (`history/reads/read-<tid>.syx`); skrivningen väljer en sådan explicit och hämtar
+  ingen egen dump. Kvar att verifiera på hårdvara att rött försvinner med den
+  ordningen, och vilken byte som orsakade overflowen.
 
 ---
 
@@ -345,6 +391,7 @@ felnamngiven capture – och är borttagen.)
 | `python rew_to_dsp8000.py probe --manual` | dumpa, pausa medan du ändrar EN sak på enheten, dumpa, diffa |
 | `python rew_to_dsp8000.py push [--send-only] FIL.syx` | skicka en dump till enheten (RCV-test, protokoll i avsnitt 4); dumpar före/efter och diffar. `--send-only`: bara skicka, för loopback-testet av interfacet |
 | `python rew_to_dsp8000.py apply [--dry-run] [--base FIL]` | patcha en dump (färsk eller `--base`) med GEQ + PEQ ur `rew_eq_suggestion.json`, pusha och läs tillbaka. Avsnitt 5b |
+| `python rew_to_dsp8000.py roundtrip [--keep]` | hårdvarutest av dump-vägen: backup → skriv känt GEQ+PEQ-mönster → läs tillbaka + jämför → återställ. Rör inte JSON/CC. Avsnitt 4 |
 | `python rew_to_dsp8000.py calibrate [--band Hz]` | verifiera CC→dB mot displayen |
 | `python rew_to_dsp8000.py send [--dry-run] [--verify] [--channel left\|right\|both]` | skicka de 31 banden ur `rew_eq_suggestion.json` |
 | `python syx_tools.py eq FIL.syx` | avkoda GEQ + PEQ ur en sparad dump (stdlib, ingen MIDI) |

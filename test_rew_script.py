@@ -23,6 +23,13 @@ def _reset():
     r.api_get, r.api_post, r.api_delete = _ORIG
 
 
+def _one(it):
+    """Enda matchande filen ur en glob - annars AssertionError."""
+    fs = list(it)
+    assert len(fs) == 1, fs
+    return fs[0]
+
+
 def _curve(points, ppo=48):
     """Bygg ett REW-svar: {startFreq, ppo, magnitude(base64 be-float32)}
     från [(freq, dB)] - dB sätts per punkt via linjär interpolation i log-f."""
@@ -359,8 +366,8 @@ def test_push_sends_dump_and_saves_before_after():
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
              contextlib.redirect_stdout(log):
             m.push(str(dump_path))
-            before = list(Path(d).glob("probe_push_before_*.syx"))
-            after = list(Path(d).glob("probe_push_after_*.syx"))
+            before = list(Path(d).glob("history/reads/push-before-*.syx"))
+            after = list(Path(d).glob("history/reads/push-after-*.syx"))
             assert len(before) == 1 and before[0].read_bytes() == b"\xf0" + zero + b"\xf7"
             assert len(after) == 1 and after[0].read_bytes() == dump
         assert "GEQ L 20 Hz: +0.00 -> +16.00 dB" in log.getvalue(), log.getvalue()[-600:]
@@ -374,8 +381,64 @@ def test_push_sends_dump_and_saves_before_after():
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
              contextlib.redirect_stdout(io.StringIO()):
             m.push(str(dump_path), send_only=True)
-            assert not list(Path(d).glob("*.syx"))
+            assert not list(Path(d).rglob("*.syx"))
         assert len(sent) == 1 and bytes(sent[0].data) == dump[1:-1]
+    finally:
+        m.mido, m.open_output, m.open_input, m.grab_dump, builtins.input = saved
+
+
+def test_roundtrip_writes_known_pattern_reads_back_and_restores():
+    """roundtrip med fejkad MIDI: backup hämtas, ett känt GEQ+PEQ-mönster patchas
+    in och pushas som EN sysex, återläsningen (= det skickade) verifieras, sedan
+    pushas backupen tillbaka. --keep hoppar återställningen."""
+    import builtins
+    import contextlib
+    import io
+    import types
+    here = Path(__file__).parent
+    base = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    sent = []
+
+    class FakePort:
+        def send(self, msg): sent.append(msg)
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    saved = (m.mido, m.open_output, m.open_input, m.grab_dump, builtins.input)
+    m.mido = types.SimpleNamespace(
+        Message=lambda type, data: types.SimpleNamespace(type=type, data=list(data)))
+    m.open_output = m.open_input = FakePort
+    try:
+        for keep, want_sends, answers in ((False, 2, ["", "ja", ""]), (True, 1, ["", "ja"])):
+            sent.clear()
+            grabs = iter([base[1:-1]])
+            m.grab_dump = lambda out, inp: (next(grabs) if not sent
+                                            else bytes(sent[-1].data))
+            builtins.input = lambda prompt="", it=iter(answers): next(it)
+            log = io.StringIO()
+            with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), \
+                 contextlib.redirect_stdout(log):
+                m.roundtrip(keep=keep)
+                backup = list(Path(d).glob("history/reads/roundtrip-backup-*.syx"))
+                testf = list(Path(d).glob("history/writes/roundtrip-test-*.syx"))
+                assert len(backup) == 1 and backup[0].read_bytes() == base
+                assert len(testf) == 1
+                patched = testf[0].read_bytes()
+            assert len(sent) == want_sends, (keep, sent)
+            assert all(s.type == "sysex" and len(s.data) == 12110 for s in sent)
+            # skickade dumpen = det kända mönstret
+            assert bytes(sent[0].data) == patched[1:-1]
+            g = syx_tools.decode_geq(patched)
+            assert g["L"][0] == -8.0 and g["R"][0] == 8.0, (g["L"][:3], g["R"][:3])
+            p = syx_tools.decode_peq(patched)
+            assert [round(x["gain_db"], 1) for x in p] == [-6.0, -6.0, 3.0, 3.0, -4.0, -4.0], p
+            assert all(x["on"] for x in p)
+            if not keep:
+                assert bytes(sent[1].data) == base[1:-1], "backupen ska pushas tillbaka"
+                assert "FUNGERAR" in log.getvalue(), log.getvalue()[-400:]
+            else:
+                assert "--keep" in log.getvalue()
     finally:
         m.mido, m.open_output, m.open_input, m.grab_dump, builtins.input = saved
 
@@ -503,7 +566,7 @@ def test_apply_end_to_end_with_fake_midi():
             answers = iter(["", "ja"])                    # checklista, bekräfta
             builtins.input = lambda prompt="": next(answers)
             m.apply()
-            applied = Path("dsp8000_applied.syx").read_bytes()
+            applied = _one(Path(d).glob("history/writes/applied-*.syx")).read_bytes()
             g = syx_tools.decode_geq(applied)
             assert g["L"][17] == 3.0 and g["R"][17] == 3.0
             pq = syx_tools.decode_peq(applied)
@@ -532,7 +595,7 @@ def test_apply_dry_run_with_base_needs_no_device():
             m.JSON_FILE = Path("rew_eq_suggestion.json")
             builtins.input = lambda *a: (_ for _ in ()).throw(AssertionError("ska inte fråga"))
             m.apply(base_path="base.syx", dry_run=True)
-            g = syx_tools.decode_geq(Path("dsp8000_applied.syx").read_bytes())
+            g = syx_tools.decode_geq(_one(Path(d).glob("history/writes/applied-*.syx")).read_bytes())
             assert g["L"][17] == -4.0 and g["R"][17] == -4.0
     finally:
         m.open_output, m.open_input, m.JSON_FILE, builtins.input = saved
@@ -572,11 +635,9 @@ def test_run_gui_allowlist_and_streams_help():
 
 
 def test_run_gui_device_read_write_and_suggestion():
-    """run_gui:s enhetsendpoints med fejkad MIDI: read avkodar en dump, write
-    patchar en färsk bas + skickar EN sysex + verifierar, suggestion läser JSON."""
-    import builtins
-    import contextlib
-    import io
+    """run_gui med fejkad MIDI: device_read sparar history/reads/read-<ts>.syx
+    (listad som bas), device_prepare patchar den VALDA basen ->
+    history/writes/applied-<ts>.syx, send skickar EN sysex, verify jämför."""
     import types
     import run_gui
     import rew_to_dsp8000 as rmod
@@ -590,43 +651,91 @@ def test_run_gui_device_read_write_and_suggestion():
         def __enter__(self): return self
         def __exit__(self, *a): pass
 
-    saved = (rmod.mido, rmod.open_output, rmod.open_input, rmod.grab_dump, rmod.JSON_FILE)
+    saved = (rmod.mido, rmod.open_output, rmod.open_input, rmod.grab_dump, run_gui.HERE)
     rmod.mido = types.SimpleNamespace(
         Message=lambda type, data: types.SimpleNamespace(type=type, data=list(data)))
     rmod.open_output = rmod.open_input = FakePort
-    try:
-        # read
-        rmod.grab_dump = lambda out, inp: base[1:-1]
-        d = run_gui.device_read()
-        assert d["geq_L"] == [0.0] * 31 and len(d["peq"]) == 3 and d["sub"] == "4f 12"
+    with tempfile.TemporaryDirectory() as td:
+        run_gui.HERE = Path(td)
+        try:
+            # read -> history/reads/read-<ts>.syx, överst i bas-listan
+            rmod.grab_dump = lambda out, inp: base[1:-1]
+            r = run_gui.device_read()
+            assert r["name"].startswith("history/reads/read-") and r["name"].endswith(".syx")
+            assert (Path(td) / r["name"]).read_bytes() == base
+            assert r["geq_L"] == [0.0] * 31 and len(r["peq"]) == 3
+            assert run_gui.bases()["bases"][0]["name"] == r["name"]
+            rb = run_gui.read_base(r["name"])          # avkodar basen utan enheten
+            assert rb["geq_L"] == [0.0] * 31 and "sub 4f 12" in rb["summary"]
 
-        # write: bas hämtas, patchad skickas, återläsning = det skickade
-        sent.clear()
-        rmod.grab_dump = lambda out, inp: base[1:-1] if not sent else bytes(sent[-1].data)
-        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            # prepare kräver en explicit, giltig bas
+            for bad in ("", "history/reads/read-nope.syx", "../etc/passwd"):
+                try:
+                    run_gui.device_prepare(bad, [0.0] * 31, [None, None, None])
+                    assert False, bad
+                except run_gui.DeviceError:
+                    pass
+
+            # prepare(base) -> send (EN sysex, ingen readback) -> verify (grab + jämför)
+            sent.clear()
+            rmod.grab_dump = lambda out, inp: bytes(sent[-1].data) if sent else base[1:-1]
             geq = [0.0] * 31; geq[17] = 3.0
             peq = [{"on": True, "freq_hz": 50, "bw_oct": 0.33, "gain_db": -6.0},
                    {"on": False, "freq_hz": 60, "bw_oct": 0.3, "gain_db": 0},
                    {"on": False, "freq_hz": 60, "bw_oct": 0.3, "gain_db": 0}]
-            res = run_gui.device_write(geq, peq)
-            assert res["mismatches"] == [], res["mismatches"]
-            applied = Path("dsp8000_applied.syx").read_bytes()
-        assert len(sent) == 1 and sent[0].type == "sysex" and len(sent[0].data) == 12110
-        g = syx_tools.decode_geq(applied); pq = syx_tools.decode_peq(applied)
-        assert g["L"][17] == 3.0 and g["R"][17] == 3.0
-        assert pq[0]["on"] and pq[0]["gain_db"] == -6.0 and pq[2]["on"] is False
+            prep = run_gui.device_prepare(r["name"], geq, peq)
+            assert prep["applied"].startswith("history/writes/applied-") and prep["base"] == r["name"]
+            assert len(sent) == 0, "prepare ska inte skicka"
+            assert run_gui.device_send()["sent"] == 12112 and len(sent) == 1
+            assert run_gui.device_verify()["mismatches"] == []
+            try:                                       # patched redan poppad
+                run_gui.device_verify(); assert False
+            except run_gui.DeviceError:
+                pass
+            applied = (Path(td) / prep["applied"]).read_bytes()
+            assert sent[0].type == "sysex" and len(sent[0].data) == 12110
+            g = syx_tools.decode_geq(applied); pq = syx_tools.decode_peq(applied)
+            assert g["L"][17] == 3.0 and g["R"][17] == 3.0
+            assert pq[0]["on"] and pq[0]["gain_db"] == -6.0 and pq[2]["on"] is False
 
-        # suggestion
-        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
-            Path("s.json").write_text(json.dumps({
+            # verify när enheten inte svarar (kvar på RCV-panelen) -> DeviceError
+            sent.clear()
+            run_gui.device_prepare(r["name"], [0.0] * 31, [None, None, None])
+            rmod.grab_dump = lambda out, inp: None
+            try:
+                run_gui.device_verify(); assert False
+            except run_gui.DeviceError:
+                pass
+            run_gui._prepared.clear()
+
+            # device_write (scriptat): läser själv, patchar, skickar, verifierar
+            sent.clear()
+            rmod.grab_dump = lambda out, inp: bytes(sent[-1].data) if sent else base[1:-1]
+            w = run_gui.device_write([0.0] * 31, [None, None, None])
+            assert w["mismatches"] == [] and w["base"].startswith("history/reads/read-")
+
+            # suggestion: explicit filnamn, history/ före repo-roten, nyaste först
+            (Path(td) / "rew_eq_suggestion.json").write_text(json.dumps({
                 "graphic_band_gains_db": {"1000": -2.0},
                 "peq_filters": [{"frequency": 44, "gaindB": -5, "q": 4}]}))
-            rmod.JSON_FILE = Path("s.json")
-            sug = run_gui.suggestion()
-            assert sug["geq"][17] == -2.0 and sug["peq"][0]["on"] and round(sug["peq"][0]["freq_hz"]) == 44
-            assert sug["peq"][1] is None
-    finally:
-        rmod.mido, rmod.open_output, rmod.open_input, rmod.grab_dump, rmod.JSON_FILE = saved
+            sdir = Path(td) / "history" / "suggestions"; sdir.mkdir(parents=True)
+            (sdir / "suggestion-20260101-000000-x.json").write_text(json.dumps({
+                "generated_at": "2026-01-01T00:00:00",
+                "graphic_band_gains_db": {"1000": -4.0}, "peq_filters": []}))
+            files = run_gui.suggestions()["files"]
+            assert files[0] == "history/suggestions/suggestion-20260101-000000-x.json"
+            assert "rew_eq_suggestion.json" in files
+            sug = run_gui.suggestion("rew_eq_suggestion.json")
+            assert sug["geq"][17] == -2.0 and sug["peq"][0]["on"]
+            assert round(sug["peq"][0]["freq_hz"]) == 44 and sug["peq"][1] is None
+            try:
+                run_gui.suggestion("s.json"); assert False
+            except run_gui.DeviceError:
+                pass
+        finally:
+            (rmod.mido, rmod.open_output, rmod.open_input, rmod.grab_dump,
+             run_gui.HERE) = saved
+            run_gui._prepared.clear()
 
 
 def test_run_gui_device_read_errors_without_mido():
@@ -642,6 +751,99 @@ def test_run_gui_device_read_errors_without_mido():
             pass
     finally:
         rmod.mido = saved
+
+
+def test_run_gui_device_cc_direct_edit():
+    """device_cc skickar ETT GEQ-band som Control Change (direktredigering),
+    rätt CC-nummer per kanal, validerar band/kanal."""
+    import types
+    import run_gui
+    import rew_to_dsp8000 as rmod
+    sent = []
+
+    class FakePort:
+        def send(self, msg): sent.append(msg)
+        def close(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    saved = (rmod.mido, rmod.open_output)
+    rmod.mido = types.SimpleNamespace(
+        Message=lambda type=None, **k: types.SimpleNamespace(type=type, **k))
+    rmod.open_output = FakePort
+    try:
+        d = run_gui.device_cc(17, 8.0, "both")          # 1 kHz, +8 dB
+        assert d["band"] == "1000" and d["cc_value"] == 96 and d["db"] == 8.0
+        assert [(m.control, m.value) for m in sent] == [(17, 96), (49, 96)]
+        sent.clear()
+        run_gui.device_cc(0, -16.0, "left")             # 20 Hz vänster
+        assert [(m.control, m.value) for m in sent] == [(0, 0)]
+        for bad in ((31, 0, "both"), (-1, 0, "both"), (5, 0, "mid")):
+            try:
+                run_gui.device_cc(*bad); assert False, bad
+            except run_gui.DeviceError:
+                pass
+    finally:
+        rmod.mido, rmod.open_output = saved
+
+
+def test_paths_selftest():
+    subprocess.run([sys.executable, "paths.py"], check=True,
+                   cwd=Path(__file__).parent, capture_output=True)
+
+
+def test_run_gui_suggestion_named_file_and_rejects_traversal():
+    """suggestion(name) läser en vald rew_eq_suggestion*.json ur run_gui.HERE
+    och avvisar allt som inte matchar mönstret (filnamn kommer från webbläsaren)."""
+    import run_gui
+    saved = run_gui.HERE
+    with tempfile.TemporaryDirectory() as td:
+        run_gui.HERE = Path(td)
+        try:
+            (Path(td) / "rew_eq_suggestion_room_a.json").write_text(json.dumps({
+                "graphic_band_gains_db": {"1000": -3.0}, "peq_filters": []}))
+            sug = run_gui.suggestion("rew_eq_suggestion_room_a.json")
+            assert sug["geq"][17] == -3.0
+            for bad in ("../secrets.json", "rew_eq_suggestion_x.json/../../etc",
+                        "other.json", "rew_eq_suggestion_missing.json"):
+                try:
+                    run_gui.suggestion(bad)
+                    assert False, bad
+                except run_gui.DeviceError:
+                    pass
+        finally:
+            run_gui.HERE = saved
+
+
+def test_run_gui_suggestions_and_measurements_endpoints():
+    """/suggestions listar filerna nyaste först; rew_measurements proxar
+    rew_script.list_measurements och blir DeviceError när REW inte svarar."""
+    import run_gui
+    import rew_script
+    saved_here, saved_list = run_gui.HERE, rew_script.list_measurements
+    with tempfile.TemporaryDirectory() as td:
+        run_gui.HERE = Path(td)
+        try:
+            (Path(td) / "rew_eq_suggestion.json").write_text("{}")
+            (Path(td) / "rew_eq_suggestion_a.json").write_text("{}")
+            assert set(run_gui.suggestions()["files"]) == {
+                "rew_eq_suggestion.json", "rew_eq_suggestion_a.json"}
+
+            rew_script.list_measurements = lambda: [
+                {"id": "3", "title": "L+R", "date": "x", "uuid": "..."}]
+            assert run_gui.rew_measurements() == [
+                {"id": "3", "title": "L+R", "date": "x"}]
+
+            def boom():
+                raise ConnectionError("nej")
+            rew_script.list_measurements = boom
+            try:
+                run_gui.rew_measurements()
+                assert False, "skulle ha kastat DeviceError"
+            except run_gui.DeviceError:
+                pass
+        finally:
+            run_gui.HERE, rew_script.list_measurements = saved_here, saved_list
 
 
 def test_dsp8000_selftest():
