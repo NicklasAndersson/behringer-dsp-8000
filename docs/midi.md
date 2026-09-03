@@ -2,8 +2,12 @@
 
 Allt som är känt om MIDI-kopplingen till Behringer Ultra-Curve **DSP8000**
 (originalmodellen, med nyare OS än 1996-manualen beskriver). Det här dokumentet
-ersätter den tidigare webbresearch-filen, readme:ns gamla MIDI-avsnitt och
-slutsatserna i `midi_captures.txt` (som ligger kvar bredvid som rå labblogg).
+ersätter den tidigare webbresearch-filen och slutsatserna i
+`midi_captures.txt` (som ligger kvar bredvid som rå labblogg).
+
+Kort version av det viktigaste, plus de öppna frågorna samlade:
+[readme.md](../readme.md). Skripten som använder allt det här:
+[verktyg.md](verktyg.md). REW-halvan: [rew.md](rew.md).
 
 **Verifierat mot enheten 2026-08-31, 2026-09-02 och 2026-09-03** med en PreSonus AudioBox
 USB som MIDI-interface. Det som *inte* är testat står uttryckligen markerat.
@@ -17,7 +21,7 @@ USB som MIDI-interface. Det som *inte* är testat står uttryckligen markerat.
 | Program Change 0–99 → byt program | dator → DSP | **fungerar** |
 | CC → grafisk EQ (31+31 band, 2 master) | dator → DSP | **fungerar** – `CC = 64 + dB×4`, CC-nummer = CNTL RCV-offset + 0…63 |
 | CC ut vid fader-rörelse | DSP → dator | sett i capture (CC 17/49), ej systematiskt testat |
-| SysEx-förfrågan `70 xx` → hela minnesdumpen | dator → DSP → dator | **fungerar** – 12110 byte efter ~5 s, utan att röra enheten |
+| SysEx-förfrågan `70 xx` → hela minnesdumpen | dator → DSP → dator | **fungerar** – 12112 byte (12110 databyte + `F0`/`F7`) efter ~5 s, utan att röra enheten |
 | SND MEMORY DUMP (knapp) → hela minnesdumpen | DSP → dator | **fungerar** |
 | Fader-rörelse → läsbar GEQ-status (`33 09`) | DSP → dator | **fungerar** |
 | Läsa GEQ + PEQ ur dumpen | – | **avkodat** (`syx_tools.py eq`, `rew_to_dsp8000.py readback`) |
@@ -57,7 +61,7 @@ väljer fält, `+/–` ändrar.
 | **PROG** | RCV ON / SND ON | Program Change tas emot / skickas |
 | **EXCL** | RCV ON / SND ON | System Exclusive tas emot / skickas |
 | **SND MEMORY DUMP** | (knapp) | `+/–` skickar hela minnet på MIDI OUT |
-| **RCV MEMORY DUMP** | (knapp) | `+/–` sätter enheten i mottagningsläge för en dump. Verkar inte krävas – enheten tar emot en pushad dump med bara EXCL RCV ON (2026-09-03) |
+| **RCV MEMORY DUMP** | (knapp) | `+/–` sätter enheten i mottagningsläge för en dump. **Krävs** – en push med bara EXCL RCV ON landar inte (2026-09-03, avsnitt 4) |
 
 `dsp8000.CC_OFFSET` i koden måste vara lika med **CNTL RCV**-talet. Om du
 sätter offset 64 får du 1996-manualens fasta mappning (CC 64–127).
@@ -335,7 +339,8 @@ felnamngiven capture – och är borttagen.)
 **2026-09-02**
 - MIDI-sidan dokumenterad (CNTL = offset-tal). `CC 17 = 96` → `L 1 kHz +8 dB`.
   Skalan `CC = 64 + dB×4` fastslagen.
-- Returväg: SND MEMORY DUMP gav 12110-byte dump först när **båda** kablarna satt i.
+- Returväg: SND MEMORY DUMP gav dump (12110 databyte, 12112 i filen) först när **båda**
+  kablarna satt i.
 - SysEx-förfrågan `70 01` / `70 10 1F` / `70 64` med modell `01`: alltid full
   dump (`4F 0A`). Modell `0E` och `7F 0E`: inget svar.
 - ADRStudio-skrivning `10 11 30` (1 kHz vä → +8 dB) med modell `01` och `0E`:

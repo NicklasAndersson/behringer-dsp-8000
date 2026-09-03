@@ -1,500 +1,320 @@
-# Behringer Ultra-Curve DSP8000 + REW: rumskorrigering och skriptad EQ-överföring
+# Behringer Ultra-Curve DSP8000 – vad vi vet om enheten
 
-Mät rummet i Room EQ Wizard (REW), låt REW räkna ut korrigeringen, skicka den
-till DSP8000 via MIDI och läs tillbaka vad enheten faktiskt tog emot. Repot
-innehåller skripten, en webb-kontrollpanel, den reverse-engineerade MIDI-implementationen
-och referensdumpar från enheten.
+Reverse-engineerad MIDI-styrning av en **Behringer Ultra-Curve DSP8000**
+(originalmodellen från 1996, *inte* DSP8024 PRO), plus skripten som mäter
+rummet med Room EQ Wizard och skriver korrigeringen till enheten.
 
-**In English:** This repository documents and automates room correction with a
-Behringer Ultra-Curve DSP8000 (the original 1996 model, not the DSP8024 PRO)
-together with Room EQ Wizard (REW). `rew_script.py` reads a measurement through
-REW's HTTP API, runs Match Target and turns the result into up to 3 parametric
-filters plus 31 graphic-EQ band values. `rew_to_dsp8000.py` sends the 31 bands
-to the unit as MIDI Control Change messages, or writes graphic **and**
-parametric EQ at once by patching the unit's memory dump and pushing it back
-(`apply`), and reads the dump back over SysEx to verify what landed. The MIDI implementation (CC map,
-SysEx request, decoded dump layout for the graphic and parametric EQ) was
-reverse-engineered and is documented in `docs/midi.md`. Everything else is in
-Swedish.
+1996-manualen säger att DSP8000 inte klarar System Exclusive och att MIDI OUT
+är död. Det gäller inte enheter med nyare OS. Vår enhet dumpar hela sitt minne
+på begäran, tar emot en patchad dump tillbaka och låter sig styras band för
+band via Control Change. Grafisk EQ, de parametriska filtren och dumpens
+layout är avkodade och verifierade mot hårdvara. Det här repot dokumenterar
+vad som fungerar, hur, och vad som fortfarande är okänt.
 
-**Auf Deutsch:** Dieses Repository dokumentiert und automatisiert die
-Raumkorrektur mit einem Behringer Ultra-Curve DSP8000 (Originalmodell von 1996,
-nicht der DSP8024 PRO) zusammen mit Room EQ Wizard (REW). `rew_script.py` liest
-eine Messung über die HTTP-API von REW, führt „Match Target" aus und macht
-daraus bis zu 3 parametrische Filter plus 31 Bandwerte für den grafischen EQ.
-`rew_to_dsp8000.py` schickt die 31 Bänder als MIDI-Control-Change an das Gerät
-oder schreibt grafischen **und** parametrischen EQ auf einmal, indem es den
-Speicher-Dump des Geräts patcht und zurückschickt (`apply`), und liest den Dump
-per SysEx zurück, um zu prüfen, was angekommen ist. Die MIDI-Implementierung (CC-Belegung, SysEx-Abfrage,
-entschlüsseltes Dump-Layout für grafischen und parametrischen EQ) wurde per
-Reverse Engineering ermittelt und ist in `docs/midi.md` beschrieben. Alles
-Weitere ist auf Schwedisch.
-
----
-
-## Innehåll i repot
-
-| Fil / katalog | Vad |
+| | |
 |---|---|
-| `readme.md` | den här filen: enheten, REW-arbetsflödet, skripten |
-| `run.sh` | skapar `.venv`, installerar `requirements.txt`, kör valfritt steg (`./run.sh help`) |
-| `run_gui.py` | webb-kontrollpanel (`./run.sh gui`): **1.** välj bas-dump (en avläsning eller en `dumps/`-referens) – "Läs av enheten" sparar en ny `history/reads/read-<tid>.syx`; **2.** fyll redigeraren (lodräta GEQ-reglage + PEQ-tabell + live EQ-kurva) från ett valt förslag eller basens egen EQ; **3.** skriv GEQ+PEQ genom att patcha *exakt den valda basen* (→ `history/writes/applied-<tid>.syx`) och pusha, i tre dialogsteg. **Direktredigering**-läge: GEQ-reglagen skickar CC direkt till enheten (ingen dump). Allt tidsstämplas i `history/`, inget val är implicit. Hopfällbart: skapa förslag per mätning + `run.sh`-kommandopanel |
-| `rew_script.py` | **steg 1**: REW → EQ-förslag (PEQ-filter + 31 bandvärden); `--output FIL` styr vart (GUI:t: `history/suggestions/suggestion-<tid>-<mätning>.json`), `--refine-from FIL` för andra varvet |
-| `show_config.py` | **steg 1b**: EQ-förslag → `history/config/config-<tid>.html`, visar vad som ska ställas in (`--input FIL`) |
-| `rew_to_dsp8000.py` | **steg 2**: två skrivvägar – `send` (CC, ett band i taget, bara GEQ) och `apply` (hel dump, GEQ+PEQ); `roundtrip`/`readback`/`probe`/`grab`/`push` |
-| `dsp8000.py` | modell av enheten: ISO-band, gain-gränser, CC-mappning, `db_to_cc` |
-| `syx_tools.py` | avkoda/diffa `.syx`-dumpar (ren stdlib) |
-| `dsp8000_gui.html` | fristående manuell GEQ-kontroll via Web MIDI (Chrome/Edge), utan REW eller servern |
-| `paths.py` | var genererade filer hamnar: `history/{reads,writes,suggestions,captures,config}/` |
-| `test_rew_script.py` | självtester utan REW/enhet (`./run.sh test`) |
-| `rew_eq_suggestion.json` | exempel på förslagsformatet (GUI-körningar hamnar i `history/`) |
-| `history/` | allt genererat, tidsstämplat och sorterat: `reads/` (avläsningar), `writes/` (patchade/pushade dumpar), `suggestions/` (EQ-förslag), `captures/` (råa monitor/sysex/probe-dumpar), `config/` (show_config-HTML). Gitignorerad |
-| `docs/midi.md` | **MIDI-referensen**: inställningar, CC, SysEx, dump-layout, vad som är testat |
-| `docs/midi_captures.txt` | rå labblogg från captures (historik, senare poster rättar tidigare) |
-| `docs/keiths-blog-…html` | sparad blogg om DSP8024 (Auto-Q, firmware) |
-| `dumps/*.syx` | referensdumpar från enheten med känt innehåll (tabell i `docs/midi.md` 6.6) |
+| **[Vad som fungerar](#vad-som-fungerar)** | CC-skalan, SysEx-dumpen, dump-layouten – kort version |
+| **[Vad vi inte vet](#vad-vi-inte-vet)** | öppna frågor och kvarvarande arbete |
+| **[docs/midi.md](docs/midi.md)** | full MIDI-referens: inställningar, byte för byte, testlogg, källor |
+| **[docs/verktyg.md](docs/verktyg.md)** | skripten, kontrollpanelen, hur man kör dem |
+| **[docs/rew.md](docs/rew.md)** | REW-flödet: mätning, målkurva, Match Target, API |
+
+**In English:** This repository documents the MIDI implementation of a
+Behringer Ultra-Curve **DSP8000** (the original 1996 model, not the DSP8024
+PRO), reverse-engineered against real hardware. Control Change writes the
+31-band graphic EQ (`CC = 64 + dB×4`); a SysEx request returns the complete
+12112-byte memory dump; the graphic and parametric EQ blocks inside that dump
+are decoded, so a patched dump can be pushed back to write both at once. The
+byte-level reference, the test log and what remains unknown are in
+[docs/midi.md](docs/midi.md). The repo also contains scripts that drive Room EQ
+Wizard's HTTP API to produce a room correction and push it to the unit
+([docs/rew.md](docs/rew.md), [docs/verktyg.md](docs/verktyg.md)). Everything
+except this summary is in Swedish.
+
+**Auf Deutsch:** Dieses Repository dokumentiert die MIDI-Implementierung eines
+Behringer Ultra-Curve **DSP8000** (Originalmodell von 1996, nicht der DSP8024
+PRO), per Reverse Engineering an echter Hardware ermittelt. Control Change
+schreibt den 31-Band-Grafik-EQ (`CC = 64 + dB×4`); eine SysEx-Abfrage liefert
+den kompletten Speicher-Dump von 12112 Byte; die Blöcke für grafischen und
+parametrischen EQ darin sind entschlüsselt, ein gepatchter Dump lässt sich also
+zurückschreiben und setzt beide auf einmal. Die Byte-Referenz, das Testprotokoll
+und die offenen Fragen stehen in [docs/midi.md](docs/midi.md). Dazu kommen
+Skripte, die über die HTTP-API von Room EQ Wizard eine Raumkorrektur erzeugen
+und an das Gerät schicken ([docs/rew.md](docs/rew.md),
+[docs/verktyg.md](docs/verktyg.md)). Alles außer dieser Zusammenfassung ist auf
+Schwedisch.
 
 ---
 
-## 0. Kom igång (macOS)
+## Enheten i korthet
 
-macOS har inget `python`-kommando, bara `python3`. Homebrews Python tillåter
-inte `pip install` globalt (PEP 668), så kör i en virtuell miljö. Enklast:
+**Behringer Ultra-Curve DSP8000**, originalmodellen. Skillnad mot PRO/DSP8024:
+20-bit AD/DA (ej 24-bit), enklare MIDI (hela minnesdumpen via SysEx, ingen
+granulär styrning), delay och AES/EBU som tillval.
 
-```sh
-./run.sh help               # full kommandolista
-./run.sh gui                # webb-kontrollpanel: läs/redigera EQ + REW-flöde + kommandon (localhost)
-./run.sh                    # = rew_script.py (steg 1), flaggor skickas vidare
-./run.sh refine             # = rew_script.py --refine --yes (andra varvet)
-./run.sh target             # = rew_script.py --show-target (REW:s fältnamn)
-./run.sh target K=V …       # = rew_script.py --target K=V … --yes
-./run.sh house-curve PATH|--clear
-./run.sh show               # = show_config.py
-./run.sh send --dry-run     # = rew_to_dsp8000.py send --dry-run (CC-vägen, bara GEQ)
-./run.sh readback           # läs GEQ + PEQ ur enheten
-./run.sh roundtrip          # hårdvarutest av dump-vägen: skriv känt GEQ+PEQ-mönster, läs tillbaka, återställ
-./run.sh test               # självtester, kräver varken REW eller enheten
-```
-
-`run.sh` skapar `.venv` och installerar beroendena vid behov. `./run.sh gui`
-öppnar en kontrollpanel på `http://127.0.0.1:8765`. Tre numrerade val, inget
-implicit:
-
-1. **Bas-dump** – dropdown med dina avläsningar (`history/reads/*.syx`) och
-   `dumps/`-referenserna. *Läs av enheten* sparar en ny `history/reads/read-<tid>.syx`
-   och väljer den. Skrivningen patchar *exakt* den valda filen – aldrig en dump
-   som hämtas i skrivögonblicket (då riskerar man att fånga enheten mitt i ett
-   lägesbyte och pusha tillbaka en trasig bild av master/limiter/gate).
-2. **Fyll redigeraren** – från ett valt förslag (`history/suggestions/*.json` +
-   committade `rew_eq_suggestion*.json`) eller *Basens EQ →*. GEQ:n är 31 lodräta
-   reglage (som `dsp8000_gui.html`); en **EQ-kurva** ovanför visar summan av
-   GEQ+PEQ, var för sig, och den valda basen (streckad), live medan du drar.
-   Raden under redigeraren visar vilken fil den kom från.
-3. **Skriv** i tre steg med paus: (1) patcha basen → `history/writes/applied-<tid>.syx`,
-   (2) tryck + på RCV MEMORY DUMP → skicka, (3) enheten tillbaka på
-   EQ-huvudskärmen → läs tillbaka och jämför (efter en push står enheten på
-   RCV-panelen och svarar inte på läsförfrågan därifrån; *Verifiera skrivningen*
-   kör om steg 3). Nästa varv: *Läs av enheten* igen för en färsk bas.
-
-**Direktredigering** (kryssruta): GEQ-reglagen skickar då ett Control Change
-direkt till enheten per band (samma väg som `send`) – snabb finjustering utan
-dump-cykel. Det ändrar bara enhetens grafiska EQ, *inte* bas-filen, PEQ eller
-master; läs av enheten igen innan en dump-skrivning ovanpå.
-
-Att skapa förslag ur en REW-mätning och hela `run.sh`-kommandopanelen ligger i
-varsin hopfällbar sektion. Ren stdlib, bara localhost. För hand:
-
-```sh
-python3 -m venv .venv
-source .venv/bin/activate          # varje ny terminal
-pip install -r requirements.txt    # requests (steg 1) + mido/python-rtmidi (steg 2)
-python rew_script.py
-```
-
-**Krav innan steg 1 fungerar:**
-- REW körs på samma dator med API:t på (Preferences → API → "Start server",
-  port 4735). Testa: `curl http://localhost:4735/version`
-- En färdig mätning i REW (du kör sweepen själv i REW:s GUI, skriptet gör resten)
-
-**Krav innan steg 2 fungerar:** MIDI-interface (testat: PreSonus AudioBox USB),
-båda MIDI-kablarna i, enhetens MIDI-sida inställd enligt `docs/midi.md` avsnitt 2.
-
-`ModuleNotFoundError: No module named 'requests'` = `.venv` är inte aktiverad.
-
----
-
-## 1. Arbetsflöde, rekommenderad ordning
-
-1. Sweep i REW med EQ:n i **bypass** (IN/OUT-LED släckt) → `./run.sh` →
-   `rew_eq_suggestion.json`
-2. `./run.sh show` → se vad som ska ställas in
-3. (Annan enhet än testenheten? `./run.sh calibrate` en gång, kolla att
-   `CC = 64 + dB×4` stämmer och att `dsp8000.CC_OFFSET` = enhetens `CNTL RCV`.)
-4. `./run.sh apply` → GEQ **och** PEQ skrivs i ett svep genom att patcha
-   enhetens dump och pusha tillbaka. **Tryck + på RCV MEMORY DUMP** när skriptet
-   pausar (utan det landar dumpen inte). `apply` läser tillbaka och bekräftar.
-   (`./run.sh apply --dry-run` visar och sparar `history/writes/applied-*.syx` först.)
-   Alternativ, bara grafisk EQ via CC: `./run.sh send --verify`, och ställ då
-   de ≤3 parametriska filtren för hand (`show_config.py` visar dem)
-6. Ny sweep med EQ:n **aktiv** (LED tänd) → det akustiska resultatet
-7. `./run.sh refine` på den nya mätningen → `send --verify` igen → mät igen.
-   Ett–två varv räcker normalt
-
----
-
-## 2. Om enheten
-
-**Modell:** Behringer Ultra-Curve **DSP8000** (originalmodellen, *inte*
-PRO/DSP8024). Skillnad mot PRO: 20-bit AD/DA (ej 24-bit), enklare MIDI (hela
-minnesdumpen via SysEx, ingen granulär styrning), delay/AES-EBU som tillval.
-1996-manualens MIDI-chart säger "ingen SysEx" – vår enhet kör nyare OS och
-dumpar. Se `docs/midi.md` bilaga B.
-
-### Grundfunktioner
 - 31-bands grafisk EQ per kanal (ISO-tersband, 20 Hz–20 kHz), ±16 dB i 0,5 dB-steg
-- 3 fullparametriska filter per kanal (delas med Feedback Destroyer), +16…−48 dB
-- Real Time Analyzer (RTA), 31 tersband
-- Feedback Destroyer (FB-D)
-- Digital delay (tillval, "DELAY 8000"-kort)
-- Digital AES/EBU in/ut (tillval, "AES 8000"-kort)
-- 100 minnesplatser för sparade program
+- 3 fullparametriska filter per kanal (+16…−48 dB) – **delas med Feedback Destroyer**
+- Real Time Analyzer (RTA), 31 tersband, med Auto-Q
+- Digital delay (tillval, "DELAY 8000"-kort), AES/EBU in/ut (tillval, "AES 8000")
+- 100 minnesplatser för program
 
-### IN/OUT-knappen (viktig för mätning)
-| LED | Betyder |
-|---|---|
-| Lyser grönt | EQ aktiv, signalen bearbetas |
-| Släckt | Bypass, signalen går orört igenom |
-| Blinkar rött | Overflow/clipping internt i DSP:n – sänk ingångsnivå |
+**De 31 ISO-tersbandsfrekvenserna:**
 
-**Vid REW-mätning:** baseline med LED **släckt**, korrigerad mätning med LED **tänd**.
-
-### DSP8000:s 31 ISO-tersbandsfrekvenser
 ```
 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400,
 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000,
 6300, 8000, 10000, 12500, 16000, 20000  (Hz)
 ```
 
+**IN/OUT-knappen** (viktig när man mäter):
+
+| LED | Betyder |
+|---|---|
+| Lyser grönt | EQ aktiv, signalen bearbetas |
+| Släckt | Bypass, signalen går orört igenom |
+| Blinkar rött | Overflow/clipping internt i DSP:n – sänk ingångsnivån |
+
+Vid REW-mätning: baseline med LED **släckt**, korrigerad mätning med LED **tänd**.
+
+**OS-version spelar roll.** 1996-OS:et har fast controller-offset (CC 64–127),
+död MIDI OUT och ingen SysEx. Nyare OS (testenheten) har justerbar offset
+0–64, skickar på MIDI OUT och klarar SND/RCV MEMORY DUMP. Versionen visas kort
+i displayen vid påslag; firmware byttes via EPROM. Jämförelsetabell i
+[docs/midi.md bilaga B](docs/midi.md#bilaga-b-os-versioner-modellskillnader-pc-mjukvara).
+
 ---
 
-## 3. Auto-Q (enhetens egen rumskorrigering)
+## Vad som fungerar
 
-### Förberedelser
-- Mätmikrofon (t.ex. ECM8000) i **MIC INPUT** på baksidan (inbyggd +15V fantommatning)
-- Placera mikrofonen på lyssningspositionen
+Verifierat mot enheten 2026-08-31, 2026-09-02 och 2026-09-03 med en PreSonus
+AudioBox USB som MIDI-interface. Full referens och testlogg: [docs/midi.md](docs/midi.md).
 
-### Rekommenderade RTA SETUP-värden
-| Parameter | Värde |
+| Vad | Riktning | Status |
+|---|---|---|
+| Program Change 0–99 → byt program | dator → DSP | **fungerar** |
+| CC → grafisk EQ (31+31 band + 2 master) | dator → DSP | **fungerar**, `CC = 64 + dB×4` |
+| SysEx-förfrågan → hela minnesdumpen | dator → DSP → dator | **fungerar**, 12112 byte efter ~5 s |
+| SND MEMORY DUMP (knapp) → dumpen | DSP → dator | **fungerar** |
+| Fader-rörelse → läsbar GEQ-status | DSP → dator | **fungerar** (`33 09`-frame) |
+| Avkoda GEQ + PEQ ur dumpen | – | **avkodat och verifierat** |
+| RCV MEMORY DUMP (skriva en dump tillbaka) | dator → DSP | **fungerar med knapptryck** på enheten |
+| Skriva GEQ **och** PEQ via patchad dump | dator → DSP | **verifierat** (roundtrip 2026-09-03) |
+| CC ut vid fader-rörelse | DSP → dator | sett i capture, ej systematiskt testat |
+| DSP8024:s granulära SysEx (ADRStudio) | – | **dött** på DSP8000 |
+
+Returvägen kräver **båda** MIDI-kablarna (interface OUT → DSP IN *och* DSP OUT
+→ interface IN). Enheten ekar inte mottagna CC.
+
+### MIDI SETUP på enheten
+
+Håll **SETUP** > 2 s → sida 2. Testenheten: MIDI ON · CHANNEL 1 · OMNI ON ·
+CNTL **RCV 0** / SND 1 · PROG RCV+SND ON · EXCL RCV+SND ON.
+
+`CNTL` är inte ON/OFF utan ett **tal** – Controller Offset 0–64, alltså första
+CC-numret. Sätt offset 64 och du får 1996-manualens fasta mappning.
+
+### Skriva grafisk EQ: Control Change
+
+```
+Bn cc vv        n = kanal 0–F, cc = CNTL RCV-offset + nummer nedan, vv = 0–127
+```
+
+| Nummer (offset 0) | Styr |
+|---|---|
+| 0–30 | vänster 31 band: 20 Hz = 0, 1 kHz = 17, 20 kHz = 30 |
+| 31 | vänster master |
+| 32–62 | höger 31 band |
+| 63 | höger master |
+
+**Värdeskalan är verifierad:** `CC = 64 + dB × 4` → 64 = 0 dB, 96 = +8 dB,
+0 = −16 dB, 127 = +15,75 dB. Nominellt 0,25 dB/steg, men GEQ:n har 0,5 dB
+upplösning så enheten rundar.
+
+Enheten **tappar CC** om 62 stycken kommer i en klump – pausa ~20 ms mellan
+meddelanden och läs tillbaka efteråt.
+
+### Läsa allt: SysEx-dump
+
+```
+Förfrågan:  F0 00 20 32 00 01 70 <xx> F7
+Svar:       F0 00 20 32 00 01 4F <sub> <flag> 20 00  <12100 databyte>  F7
+```
+
+`00 20 32` = Behringers manufacturer-ID, `01` = modell DSP8000 (`0E`, som är
+DSP8024, ignoreras helt). Oavsett `xx` svarar enheten med **hela minnet** – det
+finns ingen granulär läsning och ingen versionssträng. Enheten måste stå på
+EQ-huvudskärmen. Förfrågan ändrar ingenting.
+
+Databytena är alla < 128 men **bit-packade**: de packas upp MSB-först, 7 bitar
+per byte, till en bitström som fälten läses ur.
+
+### Avkodad dump-layout
+
+| Block | Bit-offset | Data-offset | Format |
+|---|---|---|---|
+| Okänt (arbetsbuffert) | 0–86 | 0–12 | lika i alla dumpar; kandidat: limiter/gate/delay/flaggor |
+| **PEQ** | 87–278 | 12–39 | 6 poster à 32 bitar, ordning L1 R1 L2 R2 L3 R3 |
+| Okänt mönster | ~278–340 | 39–47 | satt i knapp-dumpar, noll i förfrågnings-dumpar |
+| **GEQ** | 373–884 | 53–126 | 64 tecknade 8-bitarsvärden: 31 vä band, vä master, 31 hö, hö master |
+| Resten | 885– | 127– | **ej kartlagt** (delay, gate, limiter, de 100 programmen …) |
+
+GEQ-värde = `CC − 64`, alltså kvarts-dB: `dB = värde / 4`.
+
+PEQ-post, 32 bitar: frekvens 11 bitar (`f = 20 · 10^(raw/640)` Hz), bandbredd
+10 bitar (`(raw+1)/60` oktav), gain 11 bitar tvåkomplement (`dB = raw/16`).
+OFF = posten helt noll. Verifierat mot 6 filter satta för hand på enheten.
+
+### Skriva allt: RCV MEMORY DUMP
+
+Eftersom GEQ- och PEQ-blocken är avkodade går det att ta en färsk dump, patcha
+in nya värden och pusha tillbaka den – enda kända vägen att skriva de
+parametriska filtren.
+
+- **Kräver ett tryck på RCV MEMORY DUMP (+)** precis före sändningen. Utan det
+  landar ingenting, trots EXCL RCV ON (verifierat båda vägarna 2026-09-03).
+- Förfrågnings-formatet (`4F 0A`) duger som bas – det var formatet i det
+  lyckade testet.
+- Enheten är långsam att svara direkt efter en inkommande dump; vänta ~6 s.
+- **Ta basdumpen som en egen, ren avläsning** medan enheten står på
+  EQ-huvudskärmen. En bas grabbad mitt i ett lägesbyte innehåller skeva värden
+  utanför GEQ/PEQ, som då pushas tillbaka.
+- **Risk:** en pushad dump skriver över arbetsbufferten och kan röra de 100
+  programmen. Ta backup först, och använd bara dumpar från *samma* enhet.
+
+Protokoll, hårdvarutest och exakt patchningsformat:
+[docs/midi.md avsnitt 4 och 5b](docs/midi.md#4-rcv-memory-dump--skriva-hela-minnet-fungerar-med-knapptryck).
+
+---
+
+## Vad vi inte vet
+
+Det här är vad som återstår. Var och en är körbar med verktygen i repot –
+`probe --manual`, `grab`, `syx_tools.py diff` – och de flesta kräver bara ett
+knapptryck på enheten och två dumpar.
+
+### Dumpen: ~95 % av minnet är okartlagt
+
+- **Data-offset 127 och framåt är inte kartlagt.** Där ligger delay, noise
+  gate, limiter, RTA-inställningar och de 100 sparade programmen. Därför rör
+  `apply` dem inte – de bevaras orörda från basdumpen. Metod: `probe --manual`,
+  ändra *en* sak på enheten, diffa.
+- **De första 12 databytena** (`80 36 00 00 00 02 33 16 …`) är lika i alla
+  dumpar. Arbetsbuffert-flaggor? Limiter/gate/delay?
+- **Finns en checksumma?** 9 byte vid data-offset 39–47 är satta i
+  knapp-dumpar men noll i förfrågnings-dumpar, och mönstret återkommer vid
+  199–207. Om det är en checksumma över något vi ändrar borde en patchad dump
+  ha avvisats – det gjorde den inte, så troligen inte. Obekräftat.
+- **Sub-koden i `4F`-svaret varierar:** `4F 0A`, `4F 04` och `4F 12` har alla
+  setts från samma enhet. Byte 7 bär enhetsstatus snarare än format – vad `04`
+  betyder är oklart, och just den varianten dök upp i den enda skrivning som
+  gav röd overflow-LED.
+- **12100 = 100 × 121 går jämnt ut**, men mönstret vid data 39 återkommer vid
+  199 (delta 160, inte 121). "100 program × 121 byte" är alltså **inte**
+  bekräftat.
+- **PEQ-gainets LSB.** Alla testvärden var hela 0,5 dB-steg, så de tre lägsta
+  gain-bitarna var alltid noll. Fältet kan vara 10 bitar (1/8 dB) med bit 278
+  tillhörande nästa fält. Avgörs med ett PEQ-filter på ett udda värde plus en
+  dump tagen med **knappen**.
+
+### Skrivvägen
+
+- **PEQ-läget PAR/AUT/SGL ligger inte i dumpen** (SGL == PAR där). Efter en
+  dump-skrivning: bearbetar filtren faktiskt ljudet, eller måste läget sättas
+  för hand på PEQ-sidan? Avgörs med en REW-sweep eller en blick på displayen.
+  **Detta är den viktigaste öppna frågan** – utan svar vet man inte om
+  PEQ-skrivningen är komplett.
+- **Arbetsbuffert kontra programminne.** Readback läser arbetsbufferten och
+  den stämmer, men syns en pushad dump direkt på displayen eller först efter
+  en Program Change? Och skrivs de 100 programplatserna över?
+- **Blockerar PROTECT MEM?** Testat bara med skyddet av.
+- **Master-fadern.** CC-skalan antas vara samma som bandens men är inte
+  verifierad, och dumpens master-byte returneras rått. Därför skriver `apply`
+  aldrig master.
+- **Röd overflow-LED efter en skrivning.** Hände en gång, med en skev basdump
+  (`4F 04`). Vilken byte som orsakade det, och om den nya ordningen (egen ren
+  avläsning som bas) faktiskt gör slut på problemet, är inte verifierat på
+  hårdvara.
+
+### MIDI-detaljer
+
+- **CNTL SND-talet** – flyttar det verkligen de utgående CC-numren? Aldrig
+  kontrollerat: CC 17/49 sågs med offset 0, senare tester hade SND = 1 men
+  ingen ny capture togs.
+- **PROG SND** – skickar enheten Program Change när man byter program för
+  hand? Bör synas i `monitor`, aldrig testat.
+- **CC ut vid fader-rörelse** är sett men inte systematiskt kartlagt.
+
+### Övrigt värt att prova
+
+- **EQ-Design / UltraCurve Design** (Behringers gamla Windows 9x-editor, ej
+  längre nedladdningsbar). Givet att DSP8000 bara kan dumpa allt talar den
+  troligen samma `4F`-dump fram och tillbaka. Skulle bekräfta RCV-vägen och
+  eventuellt avslöja fler fält.
+- **Bandvärdena bygger på en enpunktsmätning** och räknas band för band utan
+  modell av hur 1/3-oktavsfiltren överlappar. Mät på fler positioner och
+  medelvärdesbilda i REW – och kör `refine`-varvet.
+
+---
+
+## Enhetens egna funktioner
+
+### Auto-Q (inbyggd rumskorrigering)
+
+Mätmikrofon (t.ex. ECM8000) i **MIC INPUT** på baksidan (inbyggd +15 V
+fantommatning), mikrofonen på lyssningspositionen.
+
+| RTA SETUP-parameter | Rekommenderat värde |
 |---|---|
 | SOURCE | MICRO |
 | GAIN MODE | AUTO |
 | MIC CORR | NONE |
 | AUTO-Q CURVE | FLAT |
 | RTA OUTPUT | PINK |
-| LEVEL | ca. -20 dB |
+| LEVEL | ca −20 dB |
 
-### Körning
-1. RTA-läge → Softkey B (TOOLBOX) → Softkey A (AUTO-Q)
-2. Välj vänster, höger eller båda kanaler
-3. Enheten spelar rosa brus, mäter, justerar grafisk EQ automatiskt
-4. Höjer aldrig ett band mer än 12 dB (skyddar högtalare från orealistiska boost-krav)
-5. Börjar alltid från nuvarande EQ-inställning – förbehandla manuellt om du
-   vill styra vilket område som justeras
-6. Avbryt i förtid med OK-knappen, då behålls det som redan justerats
-7. "NO SIGNAL DETECTED" → för svag mikrofonkänslighet, byt mick eller använd
-   extern förförstärkare
+RTA-läge → Softkey B (TOOLBOX) → Softkey A (AUTO-Q) → välj vänster, höger
+eller båda. Enheten spelar rosa brus, mäter och justerar den grafiska EQ:n.
+
+- Höjer aldrig ett band mer än 12 dB (skyddar högtalare från orealistiska boostar)
+- Börjar alltid från nuvarande EQ-inställning – förbehandla manuellt om du vill
+  styra vilket område som justeras
+- Avbryt med OK-knappen; det som redan justerats behålls
+- "NO SIGNAL DETECTED" = för svag mikrofonkänslighet, byt mick eller använd
+  extern förförstärkare
 
 **Begränsning:** grafisk EQ är ett trubbigt verktyg för smala rumsmoder i
-basen. Använd de 3 parametriska filtren manuellt för sådana problem.
+basen. Använd de 3 parametriska filtren för sådana.
+
+### FB-D (Feedback Destroyer)
+
+Automatisk detektering och dämpning av rundgång, med **samma tre parametriska
+filter** som annars används för rumskorrigering – de konkurrerar om samma
+resurs. **AUT** = filtren letar kontinuerligt efter ny feedback, **SGL** =
+filtret fixeras på hittad frekvens. Fungerar bäst på dynamiskt signalinnehåll
+(tal, sång), inte stationära toner. Primärt för PA/scen, mindre relevant vid
+rumskorrigering hemma.
 
 ---
 
-## 4. FB-D (Feedback Destroyer)
+## Repot
 
-Automatisk detektering och dämpning av rundgång. Använder **samma tre
-parametriska filter** som du annars kan använda för manuell rumskorrigering
-– de konkurrerar om samma resurs.
-
-- **AUT** (sökläge): filtren letar kontinuerligt efter ny feedback
-- **SGL** (låst läge): filtret fixeras permanent på hittad frekvens
-- Fungerar bäst på dynamiskt signalinnehåll (tal, sång), inte stationära toner
-- Primärt tänkt för PA/scenbruk, mindre relevant vid hemma-rumskorrigering
-
----
-
-## 5. Verifiering med REW
-
-### Uppkoppling
-```
-Dator (REW) → Ljudkortets utgång → DSP8000 analog in
-DSP8000 analog out → Förstärkare → Högtalare
-Mätmikrofon → Dator (REW), på lyssningsposition
-```
-
-### Grundinställningar i REW
-- **Soundcard preferences:** rätt in/out, 48 kHz för att matcha DSP8000
-- **Mic-kalibrering:** ladda .cal-fil om UMIK-1 eller liknande används
-- **Check Levels:** justera tills input ligger runt **-12 till -18 dB**
-- **Sweep length:** 1M eller längre (bättre lågfrekvensupplösning)
-- **Frekvensspann:** 10–20 Hz till 20 000 Hz
-
-### Smoothing (visningsinställning, ändrar inte data)
-| Nivå | Användning |
-|---|---|
-| 1/3 oktav | Motsvarar DSP8000:s 31 tersband – bra för jämförelse |
-| 1/6 oktav / Var | Bra allmän känsla för rummet |
-| 1/12–1/24 / None | Rådata, bäst för att se smala rumsmoder i basen |
-
----
-
-## 6. Generera EQ-förslag i REW (Match Target)
-
-> Hela det här flödet skriptas av `rew_script.py` via REW:s API (avsnitt 8).
-> Nedan är GUI-motsvarigheten och förklaringen av vad målkurvan ska vara.
-
-### Kör Match Target (GUI)
-
-1. Markera mätningen i vänsterlistan → klicka **EQ** i verktygsraden.
-2. Panel **Equaliser**: välj **Generic**.
-   - Parametriska DSP8000-filtren → **Max filters = 3**.
-   - 31-bandaren → också Generic, lägg in de 31 fasta frekvenserna med Q 4.32.
-3. Panel **Target Settings**: ställ in målkurvan (nedan).
-4. Panel **Filter Tasks**:
-   - **Match range**: t.ex. 20–300 Hz (bara basen, se nedan).
-   - **Individual max boost** / **Overall max boost**: 0 till +3 dB.
-   - **Max cut**: generöst, -12 till -20 dB.
-   - Klicka **Match response to target**.
-5. Filtren dyker upp i **EQ Filters** – det är listan `rew_script.py` läser.
-
-### Vad target ska vara
-
-**Grundform:** rak linje på högtalarnas mellanregisternivå. REW sätter
-**Target level** automatiskt; dra ner den några dB manuellt så korrigeringen
-blir mest *sänkningar*. Boosta aldrig upp djupa nullor – de är
-positionsberoende utsläckningar, EQ fixar dem inte och du bränner headroom.
-
-**Tilt / house curve:** rakt uppmätt i rummet låter ljust. Lägg en svag
-nedåtlutning, ca **-0,8 till -1 dB/oktav** från ~1 kHz och uppåt, eller ladda
-en house curve-fil (Target Settings → *House curve*, eller `--house-curve`).
-
-**Bas:** valfritt, +3 till +6 dB mjuk höjning under ~80–120 Hz. Sätt **LF
-cutoff** till vad högtalaren faktiskt klarar.
-
-**Frekvensområde att EQ:a:** bara upp till rummets transitionsfrekvens,
-~200–400 Hz i ett normalt rum. Ovanför det gör enpunkts-EQ mer skada än nytta.
-
-| Mål | Match range | Max filters | Max boost |
-|---|---|---|---|
-| 3 parametriska (rumsmoder) | 20–300 Hz | 3 | +3 dB |
-| 31-band grafisk | 20 Hz–20 kHz | (31 fasta) | +3 dB (`SAFE_BOOST_DB`) |
-
-### 31-band grafisk EQ (Generic-metoden)
-
-REW har ingen "Match graphic EQ"-knapp för 31-bands EQ:er. I GUI:t: Generic,
-filter type PK, **Q = 4.32** (= 1/3-oktavs bandbredd), de 31 ISO-frekvenserna
-som fasta frekvenser. `rew_script.py` räknar i stället banden själv ur
-kurvorna (avsnitt 8, steg 1 punkt 4).
-
-**Enklare alternativ:** kör RTA i REW (Spectrum-fliken, 1/3-oktav) medan du
-justerar DSP8000:s band live.
-
----
-
-## 7. MIDI, kort version
-
-Fullständig referens: **`docs/midi.md`** (inställningar, CC, SysEx, dump-layout,
-testlogg, vad som återstår).
-
-- **Enhetens MIDI-sida:** MIDI ON · CHANNEL 1 · OMNI ON · CNTL **RCV 0** / SND 1
-  · PROG RCV+SND ON · EXCL RCV+SND ON. `CNTL` är ett tal (Controller Offset
-  0–64), inte ON/OFF. `dsp8000.CC_OFFSET` måste vara = CNTL RCV.
-- **Skriva GEQ:** CC 0–30 = vänster band, 31 = vä master, 32–62 = höger band,
-  63 = hö master (+ offset). `CC = 64 + dB×4`, verifierat.
-- **Läsa allt:** `F0 00 20 32 00 01 70 01 F7` → enheten svarar med hela
-  minnesdumpen (12112 byte). GEQ- och PEQ-blocken är avkodade, så `readback`
-  och `send --verify` visar exakt vad enheten har. Kräver båda MIDI-kablarna.
-- **Skriva PEQ/delay/gate/limiter:** går **inte** via CC, och DSP8024:s
-  granulära SysEx svarar enheten inte på. Enda outredda vägen är **RCV MEMORY
-  DUMP** (skicka en patchad dump tillbaka) – testplan och `push`-kommando i
-  `docs/midi.md` avsnitt 4.
-- **Referensdumpar:** `dumps/` (0 dB, +16 dB, verklig kurva).
-
----
-
-## 8. Skripten i detalj
-
-### Steg 1: `rew_script.py`
-Kräver **inte** REW Pro. Du kör själv sweepen i REW. Sedan:
-
-1. välj mätning i listan (eller `--measurement ID`; `--yes` hoppar över frågan)
-   – `--output FIL` styr vart förslaget skrivs
-2. skriptet sätter equaliser → Generic och match target settings
-   (`20–300 Hz`, `individualMaxBoost 3 dB`, `overallMaxBoost 0 dB`), kör
-   `Calculate target level` + `Match target` via API. **Målkurvans form**
-   (tilt/house curve/LF cutoff) rörs inte som default men kan sättas med
-   `--target`/`--house-curve` (nedan)
-3. läser ut de parametriska filtren, **behåller de 3 PK-filter med störst
-   |gain|** (`dsp8000.PEQ_COUNT`; shelf-filter kastas, enheten har inga) och
-   skriver tillbaka dem till REW så `/eq/frequency-response` speglar exakt
-   det som hamnar på enheten
-4. beräknar 31 grafiska bandvärden: `(target − respons)` med 1/3-oktavs
-   utjämning vid ISO-frekvenserna, centrerat kring median, klippt till
-   `SAFE_BOOST_DB` (+3) upp / −16 ner
-5. sparar allt till `--output`-filen (default `rew_eq_suggestion.json`). GUI:t
-   sätter `history/suggestions/suggestion-<tid>-<mätning>.json` så varje körning
-   ligger kvar tidsstämplad och valbar; `--refine` skriver en ny sådan och läser
-   den gamla via `--refine-from FIL` (utan flaggan: läser och skriver `--output`)
-
-**Ingen dubbel-EQ:** med PEQ räknas de grafiska banden mot
-`/eq/frequency-response` (responsen *efter* de 3 filtren). Med `--no-peq`
-räknas de mot rå `/frequency-response` och gör allt själva.
-
-Svarar du `n` på "Kör Match target via API nu?" antas du redan ha kört
-matchningen i REW:s GUI.
-
-`--refine` (**andra varvet**): mät om *med* EQ:n aktiv, välj den nya
-mätningen, kör `--refine` (`--refine-from` = förra förslaget, `--output` = det
-nya). Residualen (target − uppmätt) adderas ovanpå bandvärdena; PEQ-listan följer
-med oförändrad. Grannband i en 1/3-oktavs-EQ läcker in i varandra, så första
-varvet överkorrigerar alltid lite – ett eller två refine-varv är hur man
-konvergerar.
-
-**Målkurvan via API:**
+Verktygen som producerade allt ovan, och som kör hela kedjan REW → mätning →
+EQ-förslag → enheten:
 
 ```sh
-python rew_script.py --show-target                     # REW:s riktiga fältnamn
-python rew_script.py --target lowFreqCutoffHz=25 --target slopedBOct=1.0 --yes
-python rew_script.py --house-curve /sökväg/till/kurva.txt --yes
-python rew_script.py --clear-house-curve --yes
+./run.sh help               # full kommandolista
+./run.sh gui                # webb-kontrollpanel: läs enheten, redigera EQ, skriv
+./run.sh readback           # läs enhetens GEQ + PEQ (ändrar inget, kräver bara MIDI)
+./run.sh test               # självtester, kräver varken REW eller enheten
 ```
 
-`--target KEY=VÄRDE` (upprepningsbar) läser mätningens `target-settings`,
-lägger dina nycklar ovanpå och skickar tillbaka innan `Calculate target
-level`. Fältnamnen är REW:s egna och kan skilja mellan versioner – kör
-`--show-target` en gång mot din installation. Värden typas automatiskt
-(`25` → int, `1.0` → float, `true`/`false` → bool). `--house-curve PATH` /
-`--clear-house-curve` / `--house-curve-log-interp` styr `/eq/house-curve`
-(globalt) – log-interpolation sätts alltid före filen.
-
-### Steg 1b: `show_config.py`
-Läser ett EQ-förslag (`--input FIL`, default `rew_eq_suggestion.json`), skriver
-`history/config/config-<tid>.html` och öppnar den: de 31 banden med
-målförstärkning, stapel ±16 dB, CC-nummer och CC-värde, plus de ≤3 parametriska
-filtren med Q **och** bandbredd i oktaver (enheten vill ha oktaver). Ren stdlib.
-`--no-open` hoppar över webbläsaren.
-
-### Egen equaliser-modell i REW?
-**Går inte.** REW:s equaliser-lista är inbyggd; API:t kan bara *välja*
-`{manufacturer, model}`. Därför modellerar vi DSP8000 i `dsp8000.py` och
-mappar REW:s korrigeringskurva mot den själva.
-
-### REW HTTP-API (verifierat mot 0.9.0 / V5.40 beta 101)
-
-Swagger-UI + spec: `http://localhost:4735/`. Slå på: Preferences → API → "Start server".
-
-| Endpoint | Gör |
+| Var | Vad |
 |---|---|
-| `GET /version` | `{"message": "5.40 Beta 101 API 0.9.0"}` |
-| `GET /measurements` | objekt `{"1": {...}}`, nyckeln är id |
-| `GET/POST /measurements/{id}/equaliser` | `{"manufacturer": "Generic", "model": "Generic"}` |
-| `GET/POST/PUT /measurements/{id}/target-settings` | målkurvan (`shape`, `lowFreqCutoffHz`, slopes, crossover) |
-| `GET/POST/PUT /eq/match-target-settings` | `startFrequency`, `endFrequency`, `individualMaxBoostdB`, `overallMaxBoostdB`, `flatnessTargetdB` |
-| `GET/POST/DELETE /eq/house-curve` | house curve-fil |
-| `POST /measurements/{id}/eq/command` | `{"command": "..."}`, kör asynkront |
-| `GET /measurements/process-result` | `{"processName": "Match target ID N", "message": "Completed"}`, pollas |
-| `GET/POST/PUT /measurements/{id}/filters` | filterlista; satta filter har `type` (`PK`…), `frequency`, `gaindB`, `q` |
-| `GET /measurements/{id}/eq/frequency-response` | förväntad kurva efter EQ |
-| `GET /measurements/{id}/target-response` | målkurvan som frekvenssvar |
+| [docs/midi.md](docs/midi.md) | **MIDI-referensen**: inställningar, CC, SysEx, dump-layout byte för byte, testlogg, ADRStudio-protokollet, källor |
+| [docs/verktyg.md](docs/verktyg.md) | skripten och kontrollpanelen: installation, `run.sh`, arbetsflöde, filöversikt |
+| [docs/rew.md](docs/rew.md) | REW-flödet: mätning, målkurva, Match Target, HTTP-API, `rew_script.py` |
+| [docs/midi_captures.txt](docs/midi_captures.txt) | rå labblogg från captures (historik; senare poster rättar tidigare) |
+| `dumps/*.syx` | referensdumpar från enheten med känt innehåll |
+| `docs/keiths-blog-…html` | sparad blogg om DSP8024 (Auto-Q, firmware via EPROM) |
 
-EQ-kommandon: `Calculate target level`, `Match target`, `Optimise gains`,
-`Optimise gains and Qs`, `Optimise gains, Qs and Fcs`, `Generate predicted
-measurement`, `Generate filters measurement`, `Generate target measurement`.
-
-**Filterantal** styrs av equaliser-modellen (Generic/Generic ger upp till 22),
-ingen API-väg att tvinga 3 – `rew_script.py` behåller de 3 största själv.
-
-**Sweep-triggning via API kräver REW Pro** (`POST /measure/command`). Allt
-annat skriptet gör är fritt. Kör sweepen i GUI:t.
-
-### Steg 2: `rew_to_dsp8000.py`
-Läser `rew_eq_suggestion.json` och skriver till enheten. **Två separata
-skrivvägar** (se `docs/midi.md` avsnitt 5b):
-
-- **CC, ett band i taget** (`send`): de 31 grafiska banden som var sitt Control
-  Change. Inkrementellt och snabbt, men bara GEQ, och enheten tappar meddelanden
-  om de kommer i en klump – `send --verify` läser tillbaka och rapporterar.
-- **Hel minnesdump** (`apply`): patchar enhetens dump med GEQ **+ PEQ** och
-  pushar tillbaka i ett svep (RCV MEMORY DUMP). Atomiskt, skriver båda, men
-  skriver över hela minnesbilden. `roundtrip` är hårdvarutestet av den vägen.
-
-Kommandotabell i `docs/midi.md` avsnitt 8; de viktigaste:
-
-| Kommando | Gör |
-|---|---|
-| `send --dry-run` | visar alla CC utan att skicka |
-| `send [--channel left\|right\|both] [--verify]` | CC-vägen: skickar de 31 banden (frågar först); `--verify` läser tillbaka och rapporterar band som inte landade |
-| `apply [--dry-run] [--base FIL]` | dump-vägen: patcha enhetens dump med GEQ **+ PEQ** ur JSON:en och pusha tillbaka, läs tillbaka och bekräfta |
-| `roundtrip [--keep]` | hårdvarutest av dump-vägen: backup → skriv känt GEQ+PEQ-mönster → läs tillbaka + jämför → återställ. Rör inte JSON/CC |
-| `readback` | hämtar dumpen och skriver ut 31+31 GEQ-band + 6 PEQ-filter |
-| `grab FIL.syx` / `probe` / `probe --manual` | spara dump / kartlägg dumpen (dumpa, ändra en sak, dumpa, diffa) |
-| `push [--send-only] FIL.syx` | skicka en dump till enheten – testet av RCV MEMORY DUMP, protokoll i `docs/midi.md` avsnitt 4 |
-| `calibrate` | verifiera `CC = 64 + dB×4` mot displayen |
-| `monitor` / `sysex` / `ports` | lyssna / SysEx-förfrågan / lista portar |
-
-`send` skickar **båda kanalerna** som default (Stereolink av). Före skarp
-körning: `dsp8000.CC_OFFSET` = enhetens `CNTL RCV`.
-
-Dump-vägen fungerar men **kräver ett tryck på RCV MEMORY DUMP** precis före
-sändning – både `roundtrip`, `apply` och `push` pausar för det, och även
-återställningen i `roundtrip` behöver ett till tryck. `roundtrip` 2026-09-03
-skrev en GEQ-ramp + 3 PEQ-filter och läste tillbaka dem exakt. Kvar att avgöra:
-om PEQ-*läget* (PAR/AUT/SGL) måste sättas för hand efteråt – kolla PEQ-sidan.
-
-Utan `mido` går `test_rew_script.py` fortfarande att köra.
-
-### Manuell kontroll utan REW: `dsp8000_gui.html`
-Fristående sida, pratar MIDI direkt från webbläsaren – behöver varken servern
-(`run_gui.py`) eller `.venv`. `run_gui.py`:s direktredigeringsläge gör samma sak
-via servern; den här filen finns kvar för master/program och offline-bruk.
-Öppna i **Chrome/Edge** (Web MIDI). Blockeras `file://`:
-`python3 -m http.server` → `http://localhost:8000/dsp8000_gui.html`.
-
-- 31-bands GEQ ±16 dB, läge Länkad / Endast L / Endast R
-- **"Skicka alla"** återsänder alla band (drag-events tappas ibland)
-- masterfaders L/R (0–127 rått), programval (Program Change 0–99)
-- MIDI-kanal + Controller offset (= enhetens `CNTL RCV`)
-- "Ladda REW-JSON" drar in band + PEQ-tabell (frekvens/gain/Q/bandbredd i
-  oktaver) att ställa för hand
-
-Reglagen sparas i `localStorage`; tryck "Skicka alla" efter omladdning.
-
-### `syx_tools.py`
-`eq FIL.syx` avkodar GEQ + PEQ ur en sparad dump, `diff A B` visar råa byte
-och GEQ/PEQ som ändrats, `hex` hexdumpar. Ren stdlib, ingen MIDI.
-
----
-
-## 9. Kända begränsningar
-
-- **GEQ** skrivs via CC (`send`) eller minnesdump (`apply`). **PEQ** skrivs bara
-  via dumpen. Dump-skrivvägen fungerar men **kräver ett tryck på RCV MEMORY
-  DUMP-knappen** precis före sändning – utan det landar inget (`roundtrip`
-  2026-09-03, `docs/midi.md` avsnitt 4/7). `roundtrip` verifierade att GEQ + PEQ
-  skrivs och läses tillbaka exakt. **Öppet:** PEQ-*läget* PAR/AUT/SGL ligger inte
-  i dumpen – kolla PEQ-sidan efter en skrivning. Delay, gate, limiter och
-  master-skalan ligger också i dumpen men bitfälten är **inte kartlagda**, så
-  `apply` rör dem inte (bevaras från basdumpen). PEQ + GEQ kan **läsas**
-  (`readback`)
-- Returväg kräver **båda MIDI-kablarna**. Enheten ekar inte CC, bara
-  fader-rörelse / dump / förfrågan
-- `CC_OFFSET` måste matcha enhetens `CNTL RCV`. Master-faderns CC-skala är
-  inte verifierad
-- Hela EQ-kedjan går via REW:s API utan Pro; bara sweepen körs för hand
-- REW:s API kan inte begränsa matchningen till 3 filter; skriptet behåller de
-  3 största
-- Bandvärdena bygger på en **enpunktsmätning** och räknas band för band utan
-  modell av hur 1/3-oktavsfiltren överlappar – därför +3 dB-taket och
-  `--refine`. Mät på fler positioner och medelvärdesbilda i REW innan
-  matchningen
-- Det **akustiska** resultatet verifieras med REW-sweep; `--verify` visar
-  bara vad enheten tog emot
+Källor (manualer, ADRStudio, forum) längst ned i [docs/midi.md](docs/midi.md#källor).
