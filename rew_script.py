@@ -30,9 +30,13 @@ som finns att sätta.
 
 Andra varvet (--refine): mät om MED EQ:n aktiv och kör
     python rew_script.py --refine
-så läggs residualen (target - uppmätt) ovanpå förra JSON:ens bandvärden.
-Det är så man konvergerar en grafisk EQ - grannband läcker in i varandra,
-så första varvets (target - respons) överkorrigerar alltid lite.
+så läggs residualen (target - uppmätt), dämpad med --refine-damping (default
+0,5 = halva felet per varv), ovanpå förra JSON:ens bandvärden. Det är så man
+konvergerar en grafisk EQ - grannband läcker in i varandra, så första varvets
+(target - respons) överkorrigerar alltid lite, och fullt steg per varv kan
+svänga över. Hela kedjan i ett svep (mät alla varv i förväg, varje med
+föregående varvs EQ på enheten):
+    python rew_script.py --measurement <baslinje> --refine-measurement <med-EQ>
 
 --refine behöver BARA den nya mätningen (gjord med EQ:n på) + förra
 förslagsfilen (--refine-from) - inte den ursprungliga mätningen. Den
@@ -278,7 +282,7 @@ def _value_at(curve, freq):
     return curve[-1][1]
 
 
-def graphic_band_gains(measurement_id, after_peq, base=None):
+def graphic_band_gains(measurement_id, after_peq, base=None, damping=1.0):
     """
     Grafisk 31-bands-EQ = (target - respons) samplat vid ISO-frekvenserna,
     1/3-oktavs utjämning, centrerat kring median, klippt till enhetens intervall.
@@ -288,8 +292,11 @@ def graphic_band_gains(measurement_id, after_peq, base=None):
                filtren), så grafiska EQ:n bara städar upp resten
       False -> respons = /frequency-response (rå uppmätt), grafiska EQ:n gör allt
 
-    base: {frekvens: dB} som redan sitter på enheten (förra varvets JSON).
+    base: {frekvens: dB} som redan sitter på enheten (förra varvets värden).
     Mätningen är då gjord MED den EQ:n, så residualen adderas ovanpå.
+    damping: hur stor del av residualen som läggs på (1.0 = fullt steg). < 1 för
+    förfiningsvarv så grannbandsläckaget inte får kurvan att svänga över; utan
+    base är residualen hela korrigeringen och damping saknar mening.
     """
     endpoint = ("eq/frequency-response" if after_peq else "frequency-response")
     meas = _decode_curve(api_get(
@@ -300,10 +307,23 @@ def graphic_band_gains(measurement_id, after_peq, base=None):
     raw = [_value_at(tgt, f) - _value_at(meas, f) for f in dsp8000.ISO_BANDS]
     mid = sorted(raw)[len(raw) // 2]
     base = base or {}
+    step = damping if base else 1.0
     return {
-        f: dsp8000.clamp_band_gain(g - mid + base.get(f, 0.0))
+        f: dsp8000.clamp_band_gain(base.get(f, 0.0) + step * (g - mid))
         for f, g in zip(dsp8000.ISO_BANDS, raw)
     }
+
+
+def refine_pass(measurement, base_gains, target_overrides, damping):
+    """Ett förfiningsvarv. `measurement` ska vara mätt MED föregående stegs EQ
+    aktiv på enheten: residualen (target - uppmätt), dämpad med `damping`, läggs
+    på base_gains. PEQ-filtren rörs inte. -> nya {frekvens: dB}."""
+    mid = measurement["id"]
+    api_post(f"/measurements/{mid}/equaliser",
+             {"manufacturer": "Generic", "model": "Generic"})
+    set_target_settings(mid, target_overrides)
+    eq_command(mid, "Calculate target level")
+    return graphic_band_gains(mid, after_peq=False, base=base_gains, damping=damping)
 
 
 def load_previous_output(path=OUTPUT_FILE):
@@ -389,6 +409,14 @@ def main():
     ap.add_argument("--refine-from", metavar="FIL",
                     help="--refine: läs föregående förslag härifrån (--output är ändå "
                          "vart det nya skrivs). Utan flaggan läses/skrivs --output.")
+    ap.add_argument("--refine-measurement", action="append", default=[], metavar="ID",
+                    help="förfiningsvarv direkt efter steg 1: REW-mätning gjord MED "
+                         "steg 1:s EQ aktiv. Kan upprepas - varje mätning ska då vara "
+                         "gjord med föregående varvs EQ på enheten.")
+    ap.add_argument("--refine-damping", type=float, default=0.5, metavar="0-1",
+                    help="andel av residualen ett förfiningsvarv lägger på (default "
+                         "0.5: halva felet per varv, stabilt; 1.0 = fullt steg, "
+                         "snabbare men kan svänga över vid grannbandsläckage).")
     ap.add_argument("--yes", "-y", action="store_true",
                     help="fråga inte, kör Match target via API direkt")
     ap.add_argument("--show-target", action="store_true",
@@ -423,23 +451,26 @@ def main():
         print(json.dumps(get_target_settings(measurement_id), indent=2, ensure_ascii=False))
         return
 
+    if args.refine and args.refine_measurement:
+        raise SystemExit("--refine och --refine-measurement är två sätt att göra "
+                         "samma sak; använd det ena.")
+    if str(measurement_id) in {str(x) for x in args.refine_measurement}:
+        raise SystemExit(f"--refine-measurement {measurement_id} är baslinjemätningen "
+                         "själv - förfiningen ska vara en NY sweep gjord med EQ:n aktiv.")
+
     if args.refine:
-        # Enhetens EQ (grafisk + ev. PEQ) sitter redan i mätningen: räkna
-        # residualen mot rå respons och lägg den ovanpå förra bandvärdena.
-        # Ursprungsmätningen (varv 1) behövs INTE här - bara den NYA
-        # mätningen (measurement, vald ovan) och förra varvets bandvärden
-        # (base, ur src). origin bevaras bara som spårbarhet i JSON:en.
+        # residualen mot rå respons och lägg den, dämpad, ovanpå förra bandvärdena.
+        # Ursprungsmätningen (varv 1) behövs INTE här - bara den NYA mätningen
+        # (measurement, vald ovan) och förra varvets bandvärden (base, ur src).
+        # origin bevaras bara som spårbarhet i JSON:en.
         src = args.refine_from or args.output
         prev_filters, base, origin = load_previous_output(src)
-        print(f"Refine: utgår från {len(base)} band + {len(prev_filters)} PEQ i {src}"
+        print(f"Refine (dämpning {args.refine_damping:g}): utgår från {len(base)} band "
+              f"+ {len(prev_filters)} PEQ i {src}"
               + (f" (ursprungsmätning {origin.get('id')}: {origin.get('title', '?')})"
                  if origin else "")
               + (f", skriver {args.output}." if args.output != src else "."))
-        api_post(f"/measurements/{measurement_id}/equaliser",
-                 {"manufacturer": "Generic", "model": "Generic"})
-        set_target_settings(measurement_id, target_overrides)
-        eq_command(measurement_id, "Calculate target level")
-        new_gains = graphic_band_gains(measurement_id, after_peq=False, base=base)
+        new_gains = refine_pass(measurement, base, target_overrides, args.refine_damping)
         save_output(measurement, prev_filters, new_gains, path=args.output,
                     origin_measurement=origin, previous_band_gains=base)
         changed = {f: d for f, d in
@@ -469,9 +500,20 @@ def main():
             )
         filters = keep_top_filters(measurement_id, filters)
     # after_peq=False läser rå /frequency-response -> struntar i ev. gamla filter
-    save_output(measurement, filters,
-                graphic_band_gains(measurement_id, after_peq=not args.no_peq),
-                path=args.output)
+    band_gains = graphic_band_gains(measurement_id, after_peq=not args.no_peq)
+
+    origin, prev_gains = measurement, None
+    for rid in args.refine_measurement:
+        rm = find_measurement(rid)
+        print(f"Förfiningsvarv mot mätning {rid} ({rm.get('title', '?')}), "
+              f"dämpning {args.refine_damping:g} - mätningen måste vara gjord MED "
+              "föregående stegs EQ aktiv på enheten.")
+        prev_gains = band_gains
+        band_gains = refine_pass(rm, band_gains, target_overrides, args.refine_damping)
+        measurement = rm
+
+    save_output(measurement, filters, band_gains, path=args.output,
+                origin_measurement=origin, previous_band_gains=prev_gains)
 
 
 if __name__ == "__main__":

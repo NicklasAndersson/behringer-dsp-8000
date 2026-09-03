@@ -177,6 +177,33 @@ def test_graphic_band_gains_refine_adds_base():
     assert g[63] == -6.0 and g[2000] == 2.5 and g[1000] == 0.0
 
 
+def test_graphic_band_gains_damping_scales_the_residual_over_base():
+    # +8 dB puckel vid 63 Hz kvar efter förra varvet (base -2 där)
+    meas = [(10, 80), (50, 80), (63, 88), (80, 80), (30000, 80)]
+    r.api_get = lambda p: _curve([(10, 80), (30000, 80)]) if "target-response" in p else _curve(meas)
+    base = {63: -2.0}
+    full = r.graphic_band_gains("1", after_peq=False, base=base, damping=1.0)[63]
+    half = r.graphic_band_gains("1", after_peq=False, base=base, damping=0.5)[63]
+    assert -10.6 <= full <= -9.4, full          # -2 + 1.0*(-8)
+    assert -6.4 <= half <= -5.6, half           # -2 + 0.5*(-8)
+    # utan base är residualen hela korrigeringen - damping ska inte röra den
+    assert r.graphic_band_gains("1", after_peq=False, damping=0.5)[63] \
+        == r.graphic_band_gains("1", after_peq=False, damping=1.0)[63]
+
+
+def test_refine_pass_chains_base_runs_calc_target_and_leaves_peq():
+    calls = []
+    r.api_post = lambda p, b: calls.append(p) or {}   # {} -> eq_command kör synkront
+    r.api_get = lambda p: _curve([(10, 80), (30000, 80)]) if "target-response" in p \
+        else _curve([(10, 80), (63, 86), (80, 80), (30000, 80)])
+    base = {f: 0.0 for f in dsp8000.ISO_BANDS}
+    out = r.refine_pass({"id": "7"}, base, {}, damping=0.5)
+    assert set(out) == set(dsp8000.ISO_BANDS)
+    assert any("/measurements/7/equaliser" in c for c in calls)
+    assert any("/measurements/7/eq/command" in c for c in calls)
+    assert out[63] < 0                              # puckel -> dämpad cut
+
+
 def test_graphic_band_gains_uses_eq_response_after_peq():
     urls = []
     r.api_get = lambda p: urls.append(p) or _curve([(10, 80), (30000, 80)])

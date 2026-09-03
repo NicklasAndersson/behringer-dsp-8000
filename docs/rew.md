@@ -125,8 +125,9 @@ matchningen i REW:s GUI.
 
 Mät om *med* EQ:n aktiv, välj den nya mätningen, kör `./run.sh refine`
 (`--refine-from` = förra förslaget, `--output` = det nya; utan flaggan läses
-och skrivs `--output`). Residualen (target − uppmätt) adderas ovanpå
-bandvärdena; PEQ-listan följer med oförändrad.
+och skrivs `--output`). Residualen (target − uppmätt), **dämpad med
+`--refine-damping` (default 0,5)**, adderas ovanpå bandvärdena; PEQ-listan
+följer med oförändrad.
 
 `--refine` behöver bara **två** saker: den nya mätningen (`--measurement`,
 gjord med EQ:n på) och förra förslagsfilen (`--refine-from`) - EQ-inställningarna
@@ -142,7 +143,23 @@ visar båda som en extra kolumn/rad; kontrollpanelen visar dem under
 förslagsväljaren när ett förslag laddas.
 
 Grannband i en 1/3-oktavs-EQ läcker in i varandra, så första varvet
-överkorrigerar alltid lite – ett eller två refine-varv är hur man konvergerar.
+överkorrigerar alltid lite. Fullt steg per varv (`--refine-damping 1.0`) kan
+svänga över – default 0,5 tar halva felet per varv, stabilt, på bekostnad av
+fler varv. Får refine *extrema* värden är det nästan alltid att mätningen inte
+är gjord med förra stegs EQ aktiv (fel mätning vald, EQ ej skriven, eller FB-D
+ON som flyttat PEQ-filtren).
+
+Hela kedjan i ett svep, om alla varv redan är mätta (baslinje utan EQ, varje
+förfiningsmätning med föregående varvs EQ på enheten):
+
+```sh
+python rew_script.py --measurement <baslinje-id> \
+    --refine-measurement <med-eq-id> [--refine-measurement <med-eq-id-2> ...] \
+    --refine-damping 0.5 --output history/suggestions/<namn>.json --yes
+```
+
+I kontrollpanelen: **Baslinjemätning** + **Förfiningsmätning** i egna
+listor, dämpningsfältet, **Bygg förslag**.
 
 ### Målkurvan via API
 

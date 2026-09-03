@@ -478,24 +478,31 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
  <summary>Skapa / uppdatera ett EQ-förslag från en REW-mätning</summary>
  <ol class="steps">
   <li>Starta REW med API:t på (Preferences → API → <i>Start server</i>) och kör en
-      sweep med EQ:n i <b>bypass</b> (IN/OUT-LED släckt).</li>
-  <li>Välj mätning:
+      sweep med EQ:n i <b>bypass</b> (IN/OUT-LED släckt) = baslinjen.</li>
+  <li><b>Baslinjemätning</b> (EQ i bypass):
       <select id="measSel"><option value="">… läser från REW …</option></select>
-      <button id="measRefresh" title="hämta listan från REW igen">↻</button>
-      <button id="runStep1">Kör steg 1</button>.
-      Kör Match target och skriver <code>history/suggestions/suggestion-&lt;tid&gt;-&lt;mätning&gt;.json</code>
-      (ingen vald mätning = välj i kommandopanelen).</li>
-  <li>Utskrift och ev. frågor hamnar i <b>Kommandopanelen</b> nedan – den öppnas
-      automatiskt, svara i rutan där. När den är klar:
-      <button id="loadSug3" title="Väljer filen med senast ändrad tid i history/suggestions/ ELLER rew_eq_suggestion*.json i repo-roten (samma lista/ordning som förslagsväljaren i steg 2) och laddar den – inte nödvändigtvis just den du skapade i steg ovan, om något annat skrivits senare.">Ladda in senaste förslaget (nyaste filen)</button>
+      <button id="measRefresh" title="hämta listan från REW igen">↻</button></li>
+  <li><b>Förfiningsmätning</b> (valfri – en sweep gjord <b>med</b> steg 1:s EQ aktiv):
+      <select id="refineSel"><option value="">(ingen – bara baslinjen)</option></select>
+      &nbsp;dämpning
+      <input type="number" id="refineDamp" min="0.1" max="1" step="0.1" value="0.5"
+             style="width:3.6rem" title="andel av residualen som läggs på per varv (0,5 = halva felet, stabilt)">
+      <span class="muted">= andel av residualen per varv</span></li>
+  <li><button id="runBuild">Bygg förslag</button> →
+      <code>history/suggestions/suggestion-&lt;tid&gt;-&lt;mätning&gt;.json</code>.
+      Utskrift och ev. frågor i <b>Kommandopanelen</b> nedan (öppnas automatiskt).
+      Klart:
+      <button id="loadSug3" title="Väljer filen med senast ändrad tid i history/suggestions/ ELLER rew_eq_suggestion*.json i repo-roten (samma lista/ordning som förslagsväljaren i steg 2) och laddar den – inte nödvändigtvis just den du skapade nyss, om något annat skrivits senare.">Ladda in senaste förslaget (nyaste filen)</button>
       – laddar samma fil som hamnar överst i <code>sugSel</code> ovan; kolla
       filnamn/tid som visas under redigeraren efteråt om du är osäker på vilken.</li>
-  <li>Andra varvet (ny mätning gjord <b>med</b> EQ:n aktiv): välj bara den <b>nya</b>
-      mätningen (nr2) och det förslag du vill förfina, <button id="runRefine">Refine →
-      nytt förslag</button>. Ursprungsmätningen (varv 1) behöver du inte peka ut igen -
-      den följer med automatiskt från det valda förslaget. Ladda in det nya förslaget
-      (<code>sugSel</code> ovan) för att se ursprungsmätningen och en diff mot förra
-      varvet, skriv igen.</li>
+  <li>Fler varv: skriv förslaget till enheten, mät igen med EQ:n på, välj den nya
+      mätningen som förfiningsmätning och bygg om – eller förfina det redan inlästa
+      förslaget (steg 2 ovan) mot förfiningsmätningen:
+      <button id="runRefine">Förfina inläst förslag</button>.
+      Ursprungsmätningen (varv 1) behöver du inte peka ut igen – den följer med
+      automatiskt från det valda förslaget. Ladda in det nya förslaget
+      (<code>sugSel</code> ovan) för att se ursprungsmätningen och en diff mot
+      förra varvet.</li>
  </ol>
 </details>
 
@@ -702,14 +709,14 @@ function nowTs() {
 }
 
 async function loadMeasList() {
-  const sel = $('measSel');
+  const opt = m => `<option value="${m.id}|${slug(m.title)}">${m.id}: ${m.title}${m.date ? ' ('+m.date+')' : ''}</option>`;
   try {
     const d = await jget('/measurements');
-    sel.innerHTML = d.map(m =>
-      `<option value="${m.id}|${slug(m.title)}">${m.id}: ${m.title}${m.date ? ' ('+m.date+')' : ''}</option>`
-    ).join('') || '<option value="">(inga mätningar i REW)</option>';
-  } catch (e) { sel.innerHTML = `<option value="">${e}</option>`; }
+    $('measSel').innerHTML = d.map(opt).join('') || '<option value="">(inga mätningar i REW)</option>';
+    $('refineSel').innerHTML = '<option value="">(ingen – bara baslinjen)</option>' + d.map(opt).join('');
+  } catch (e) { $('measSel').innerHTML = $('refineSel').innerHTML = `<option value="">${e}</option>`; }
 }
+const refineDamp = () => Math.min(1, Math.max(0.1, +$('refineDamp').value || 0.5));
 async function loadSugList(select) {
   const sel = $('sugSel');
   try {
@@ -758,18 +765,24 @@ $('loadSug').onclick = loadSug;
 $('loadSug3').onclick = async () => { await loadSugList(); await loadSug(); };
 $('measRefresh').onclick = loadMeasList;
 $('flat').onclick = () => { setEditorGeq(BANDS.map(() => 0)); setEditorPeq([null,null,null]); setEditorFrom('nollad'); say('redigeringen nollad'); };
-$('runStep1').onclick = () => {
+$('runBuild').onclick = () => {
   const v = $('measSel').value;
-  if (!v) { $('cmdline').value = ''; return runCmd(); }
+  if (!v) { $('cmdline').value = ''; return runCmd(); }   // ingen vald = fråga i panelen
   const [id, sl] = v.split('|');
-  $('cmdline').value = `--measurement ${id} --output history/suggestions/suggestion-${nowTs()}-${sl}.json --yes`;
+  const rv = $('refineSel').value;
+  if (rv && rv.split('|')[0] === id)
+    return alert('förfiningsmätningen är samma som baslinjen – välj en ny sweep gjord med EQ:n aktiv');
+  let cmd = `--measurement ${id}`;
+  if (rv) cmd += ` --refine-measurement ${rv.split('|')[0]} --refine-damping ${refineDamp()}`;
+  $('cmdline').value = cmd + ` --output history/suggestions/suggestion-${nowTs()}-${sl}.json --yes`;
   runCmd();
 };
 $('runRefine').onclick = () => {
-  const v = $('measSel').value, f = $('sugSel').value;
-  if (!v || !f) return alert('välj både en (ny) mätning och det förslag du vill förfina');
-  const sl = v.split('|')[1] || 'matning';
-  $('cmdline').value = `refine --refine-from ${f} --measurement ${v.split('|')[0]}`
+  const rv = $('refineSel').value, f = $('sugSel').value;
+  if (!rv || !f) return alert('välj både ett inläst förslag (steg 2 ovan) och en förfiningsmätning');
+  const sl = rv.split('|')[1] || 'matning';
+  $('cmdline').value = `refine --refine-from ${f} --measurement ${rv.split('|')[0]}`
+    + ` --refine-damping ${refineDamp()}`
     + ` --output history/suggestions/suggestion-${nowTs()}-${sl}.json`;
   runCmd();
 };
