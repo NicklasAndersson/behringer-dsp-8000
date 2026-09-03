@@ -250,8 +250,9 @@ F0 00 20 32 <dev> <model> <cmd …> F7
 använder) ignoreras helt av vår enhet.
 
 `dev` = **MIDI-kanal − 1** enligt EQ-Design (6.8): den skickar utkanalen − 1
-och läser enhetens kanal ur `44`-svaret. Vi har bara kört `00` med CHANNEL 1;
-att enheten kräver rätt kanal är otestat (readme:s checklista).
+och läser enhetens kanal ur `44`-svaret. Bekräftat 2026-09-03: `43` besvaras
+med `44 00`, device-ID `00` på CHANNEL 1. Att enheten *kräver* rätt kanal är
+otestat (readme:s checklista).
 
 ### 6.2 Förfrågan → dump
 
@@ -447,9 +448,9 @@ device-ID = inkanalen.
 
 | Kmd | Riktning | Data | Betyder | Status hos oss |
 |---|---|---|---|---|
-| `43` | → DSP | – | "vem är där?" | otestat – `./run.sh raw 43` |
-| `44` | DSP → | – | svar på `43`, device-ID = enhetens kanal | otestat |
-| `40` | → DSP | – | begär minnesdumpen ("Read DSP8000 Data?") | otestat; vårt `70 xx` ger också dumpen |
+| `43` | → DSP | – | "vem är där?" | **verifierat 2026-09-03**: `44` tillbaka inom sekunden |
+| `44` | DSP → | 1 byte | svar på `43`: `F0 00 20 32 00 01 44 00 F7` – device-ID `00` = CHANNEL 1, plus en databyte `00` som EQ-Design inte läser. Skickar man `44` själv svarar enheten inte | **verifierat 2026-09-03** |
+| `40` | → DSP | – | begär minnesdumpen ("Read DSP8000 Data?") | **verifierat 2026-09-03**: samma 12112-bytesdump som `70 xx` |
 | `4F` | båda | 12104 packade byte | hela minnesbilden (nedan). → DSP: "Update DSP8000", efter rutan "Select MEMORY DUMP RECEIVE on DSP8000" | **verifierat** (`grab`/`push`, avsnitt 4) |
 | `21` | båda | `<prog>` + 32 L + 32 R | grafisk EQ opackad: `dB·2 + 32` (0–64, 32 = 0 dB), band 0–30 + master per kanal | otestat → DSP: GEQ-skrivning **utan knapptryck** |
 | `22` | båda | `00` + 32 packade (24 byte = 6 PEQ-poster + 4 fyll) | de sex parametriska filtren i arbetsbufferten | otestat → DSP: **granulär PEQ-skrivning** |
@@ -457,7 +458,7 @@ device-ID = inkanalen.
 | `23` | båda | `<prog>` + 120 packade (104 byte) | ett helt program 1–100 | otestat |
 | `15` | → DSP | 1 byte flaggor | RTA-styrning: bit 0–3 = fyra RTA-inställningar (auto gain, detektor, max display, 1/0,5 dB – ordningen okänd), bit 4 = engångspuls. Skickas efter varje `11` ⇒ RTA-strömmen | otestat |
 | `11` | DSP → | 1 byte + 80 packade (70 byte) | RTA-ram: 64 bandvärden + statusbyte (nivå/gain i 4 dB-steg) | otestat |
-| `41` / `42` | båda | – | läge EQ / RTA (menyn Mode; enheten skickar samma vid byte på fronten) | otestat |
+| `41` / `42` | båda | – | läge EQ / RTA (menyn Mode; enheten skickar samma vid byte på fronten) | `41` skickat 2026-09-03: inget svar (inget väntat), displayen inte kontrollerad; `42` otestat |
 | `10` | DSP → | 16 packade | okänt – EQ-Design tar emot och ignorerar | – |
 | `33` | DSP → | program + 64 byte | fader-status (6.5) – **okänt för EQ-Design 1.0** | verifierat |
 | `70 xx` | → DSP | – | vår förfrågan – **finns inte i EQ-Design** men ger dumpen | verifierat |
@@ -710,6 +711,13 @@ räknas vid fs = 48 000 Hz.
   – därav `aUT O Q`), frekvensen linjär i tjugondelar (96,150 Hz och 17/18/19
   kHz exakt). `33`-ramen är 32 = 0 dB, inte CC-skalan. Nytt `./run.sh raw
   <hex…>` för att prova kommandona mot enheten.
+- **EQ-Design:s kommandon mot enheten** (`./run.sh raw`): `43` → `44 00` på
+  under en sekund, device-ID `00` (CHANNEL 1) – identifieringen fungerar. `40`
+  → hela dumpen (12112 byte; statusbyte `09`, program 10, crossfade 10 s),
+  samma som `70 xx`. `44` och `41` ger inget svar – väntat, `44` är ett svar
+  och `41` ett lägesbyte utan kvittens; om displayen bytte vid `41` är inte
+  noterat. Arbetsbuffertens namn läses nu ` UT O Q` – första tecknet har
+  blivit blankt sedan `aUT O Q`.
 
 ---
 

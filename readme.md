@@ -101,7 +101,7 @@ AudioBox USB som MIDI-interface. Full referens och testlogg: [docs/midi.md](docs
 | Avkoda GEQ + PEQ ur dumpen | – | **avkodat och verifierat** |
 | RCV MEMORY DUMP (skriva en dump tillbaka) | dator → DSP | **fungerar med knapptryck** på enheten |
 | Skriva GEQ **och** PEQ via patchad dump | dator → DSP | GEQ **verifierat**; PEQ-**värdena** i dumpen stämmer (SysEx-återläsning bit-exakt), men PEQ-**displayen** visar fel frekvens för post 2–6 (se "Vad vi inte vet") |
-| EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03; bilden verifierad mot våra dumpar, kommandona (`21` GEQ, `22` PEQ, `43`/`44` …) otestade |
+| EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03; `43`→`44` (identifiering) och `40` (dump) **verifierade** mot enheten, `21` GEQ / `22` PEQ / `42` RTA / `15` RTA-ström otestade |
 | CC ut vid fader-rörelse | DSP → dator | sett i capture, ej systematiskt testat |
 | DSP8024:s granulära SysEx (ADRStudio) | – | **dött** på DSP8000 |
 
@@ -146,7 +146,7 @@ Svar:       F0 00 20 32 00 01 4F <12104 databyte> F7
 `00 20 32` = Behringers manufacturer-ID, `00` = device-ID = MIDI-kanal − 1
 (enligt EQ-Design), `01` = modell DSP8000 (`0E`, som är DSP8024, ignoreras
 helt). Oavsett `xx` svarar enheten med **hela minnet**; EQ-Design begär samma
-sak med `40` och har därtill granulära kommandon vi inte provat
+sak med `40` (verifierat) och har därtill granulära kommandon vi inte provat
 ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)).
 Enheten måste stå på EQ-huvudskärmen. Förfrågan ändrar ingenting.
 
@@ -362,16 +362,19 @@ körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlo
 - [ ] **Svarar enheten från RTA-skärmen? [G]** (och ADRStudio för DSP8024):
   SysEx tas emot på EQ- *och* RTA-skärmen, inte i SETUP, LEVEL METER, FB-D,
   PEQ. Bara EQ-skärmen är testad. `./run.sh grab` från varje skärm.
-- [ ] **Device-ID = MIDI-kanal − 1.** Så gör EQ-Design, och `44`-svaret ska
-  bära enhetens kanal. Vi har bara kört `00` med CHANNEL 1. Sätt CHANNEL 2:
-  `./run.sh raw 43` med `00` (ska tigas ihjäl?) – och ändra `_send_sysex`:s
-  dev till `01`.
-- [ ] **EQ-Design:s kommandon**, alla otestade
-  ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)):
-  `./run.sh raw 43` ska ge ett `44`-svar; `raw 40` dumpen; `raw 41` / `raw 42`
-  ska byta EQ/RTA på displayen; `raw 15 00` ska ge en `11`-RTA-ram; `raw 21 00`
-  + 64 byte (32 = 0 dB) ska skriva GEQ **utan knapptryck**; `raw 22 00` + 32
-  packade byte ska skriva PEQ. Lyckas `21`/`22` blir `apply` knappfri.
+- [ ] **Device-ID = MIDI-kanal − 1.** `44`-svaret bär `00` på CHANNEL 1
+  (bekräftat 2026-09-03). Kvar: sätt CHANNEL 2 på enheten – svarar `raw 43`
+  fortfarande med dev `00` i förfrågan, och blir svaret `01`? (`_send_sysex`
+  i `rew_to_dsp8000.py` har dev hårdkodat till `00`.)
+- [x] ~~`raw 43` ska ge ett `44`-svar; `raw 40` dumpen~~ **Bekräftat
+  2026-09-03**: `43` → `44 00` direkt, `40` → hela dumpen.
+- [ ] **EQ-Design:s övriga kommandon** ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)):
+  `raw 42` ska byta till RTA-skärmen och `raw 41` tillbaka (`41` skickades
+  utan att displayen kontrollerades); `raw 15 00` ska ge en `11`-RTA-ram;
+  `raw 21 00` + 64 byte (32 = 0 dB, master sist per kanal – skicka enhetens
+  egen master, annars ändras utnivån) ska skriva GEQ **utan knapptryck**;
+  `raw 22 00` + 32 packade byte ska skriva PEQ. Lyckas `21`/`22` blir
+  `apply` knappfri.
 - [ ] **`33`-ramens skala:** 1 kHz till +8 dB på fronten, `monitor` ska visa
   +8.0 (råvärde 48, inte 96).
 - [ ] **CC utanför 0–63. [G]**: master, bypass och limiter kan styras via CC.
