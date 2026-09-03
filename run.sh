@@ -28,7 +28,8 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh apply [--dry-run]      patcha enhetens dump med rew_eq_suggestion.json (GEQ+PEQ) och pusha tillbaka
   ./run.sh roundtrip [--keep]     hårdvarutest av dump-vägen: skriv känt GEQ+PEQ-mönster, läs tillbaka, återställ
   ./run.sh probe [--band N --value CC]  dumpa, sätt ett band via CC, dumpa, diffa
-  ./run.sh probe --manual         dumpa, pausa medan du ändrar PEQ/delay på enheten, dumpa, diffa
+  ./run.sh probe --cc 31 --value 40    dumpa, sätt vä master via CC, dumpa, diffa (63 = hö master)
+  ./run.sh probe --manual [--note "limiter -10 dB"]  dumpa, pausa medan du ändrar en sak på enheten, dumpa, diffa
   ./run.sh calibrate              kalibrera CC->dB mot enhetens display, en gång per enhet
   ./run.sh send --dry-run         visa vilka CC som skulle skickas, utan att skicka
   ./run.sh send [--verify]        skicka de 31 bandvärdena (frågar först); --verify läser tillbaka

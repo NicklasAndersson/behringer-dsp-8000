@@ -298,6 +298,46 @@ def test_decode_geq_known_dumps():
     assert mx["L"] == [16.0] * 31 and mx["R"] == [16.0] * 31, mx
 
 
+def test_bit_diff_finds_a_single_changed_field():
+    """bit_diff ska peka ut exakt det bit-spann som ändrats - primitiven för
+    att kartlägga nya fält (master, delay, limiter) ur en probe."""
+    base = (Path(__file__).parent / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    patched = bytearray(base)
+    pos = syx_tools.GEQ_BIT_OFFSET + 8 * 31            # vä master
+    for i in range(8):                                  # skriv -24 (= -6 dB i kvarts-dB)
+        bit = ((-24 & 0xFF) >> (7 - i)) & 1
+        byte, off = (pos + i) // 7, 6 - ((pos + i) % 7)
+        patched[1 + syx_tools.DUMP_HEADER_LEN + byte] = (
+            (patched[1 + syx_tools.DUMP_HEADER_LEN + byte] & ~(1 << off)) | (bit << off))
+    spans = syx_tools.bit_diff(base, bytes(patched))
+    assert len(spans) == 1, spans
+    start, width, before, after = spans[0]
+    assert start >= pos and start + width <= pos + 8, spans
+    assert syx_tools.bit_label(start) == "GEQ L master", syx_tools.bit_label(start)
+    assert syx_tools.decode_geq(bytes(patched))["L_master"] == -24
+    assert syx_tools.bit_diff(base, base) == []
+
+
+def test_geq_offset_and_scale_against_hardware():
+    """dumps/dsp8000_sysex_edges.syx lästes ur enheten 2026-09-03 med exakt sex
+    kända värden satta: 20 Hz, 20 kHz och master, L −0,5 dB / R +0,5 dB.
+    Låser GEQ_BIT_OFFSET (372) och GEQ_DB_PER_UNIT (0,5) mot hårdvaran - en
+    bit fel eller fel skala ger genast fel dB eller läckage till grannbandet."""
+    b = (Path(__file__).parent / "dumps" / "dsp8000_sysex_edges.syx").read_bytes()
+    g = syx_tools.decode_geq(b)
+    assert g["L"][0] == -0.5 and g["L"][30] == -0.5, (g["L"][0], g["L"][30])
+    assert g["R"][0] == +0.5 and g["R"][30] == +0.5, (g["R"][0], g["R"][30])
+    assert g["L_master"] * syx_tools.GEQ_DB_PER_UNIT == -0.5, g["L_master"]
+    assert g["R_master"] * syx_tools.GEQ_DB_PER_UNIT == +0.5, g["R_master"]
+    assert g["L"][1:30] == [0.0] * 29 and g["R"][1:30] == [0.0] * 29, "läckage mellan fälten"
+    # och inversen: skriv samma sex värden i en nolldump -> samma bitar
+    zero = (Path(__file__).parent / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    L = [0.0] * 31; L[0] = L[30] = -0.5
+    R = [0.0] * 31; R[0] = R[30] = +0.5
+    out = syx_tools.decode_geq(syx_tools.patch_dump(zero, geq_L=L, geq_R=R))
+    assert out["L"] == L and out["R"] == R, (out["L"][:2], out["R"][:2])
+
+
 def test_decode_peq_roundtrips_a_record():
     """Bygg en dump med PEQ L1 = 1 kHz, 1 okt, -6 dB och läs tillbaka."""
     payload = bytearray(10 + 12100)
@@ -305,8 +345,8 @@ def test_decode_peq_roundtrips_a_record():
     bits = []
     fr = round(640 * math.log10(1000 / 20))          # ~1088
     bw = 60 - 1                                        # 1,000 okt -> raw 59
-    g = -6 * 16                                        # -96
-    for val, w in ((fr, 11), (bw, 10), (g & 0x7FF, 11)):
+    g = -6 * 8                                         # -48, 10-bitars fält (dB = raw/8)
+    for val, w in ((fr, 11), (bw, 10), (g & 0x3FF, syx_tools.PEQ_GAIN_BITS)):
         for i in range(w):
             bits.append((val >> (w - 1 - i)) & 1)
     for i, bit in enumerate(bits):                     # posten börjar på bit 87
@@ -318,12 +358,40 @@ def test_decode_peq_roundtrips_a_record():
     assert all(not f["on"] for f in fs[1:]), fs
 
 
+def test_patch_dump_never_touches_master():
+    """Master ska aldrig ändras av en EQ-skrivning - en rumskorrigering får inte
+    flytta utnivån. (Med den gamla, en bit felskjutna modellen hamnade bandens
+    skrivning i masters teckenbit: −8,5 dB blev +55,5 dB.)"""
+    base = (Path(__file__).parent / "dumps" / "dsp8000_sysex_edges.syx").read_bytes()
+    before = syx_tools.decode_geq(base)
+    assert before["L_master"] and before["R_master"], "basen måste ha master != 0"
+    for kw in ({"geq_L": [-3.0] * 31}, {"geq_R": [16.0] * 31},
+               {"geq_L": [-16.0] * 31, "geq_R": [-16.0] * 31}):
+        g = syx_tools.decode_geq(syx_tools.patch_dump(base, **kw))
+        assert g["L_master"] == before["L_master"], (kw, g["L_master"])
+        assert g["R_master"] == before["R_master"], (kw, g["R_master"])
+
+
+def test_patch_dump_leaves_the_bit_after_the_peq_gain_alone():
+    """Postens 32:a bit (bit 278 för R3) ligger utanför gain-fältet och tillhör
+    nästa, okartlagda block - den är satt i 0db-dumpen även med PEQ orörd.
+    patch_dump ska skriva gainen men lämna den biten."""
+    base = (Path(__file__).parent / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
+    before = syx_tools._msb_bits(base[11:-1])
+    assert before[278] == 1, "referensdumpen ska ha biten satt - annars testar detta inget"
+    out = syx_tools.patch_dump(base, peqs=[None] * 5 + [{"freq_hz": 100, "bw_oct": 1.0,
+                                                         "gain_db": -6.0}])
+    after = syx_tools._msb_bits(out[11:-1])
+    assert after[278] == 1, "skrivningen klottrade i nästa block"
+    assert syx_tools.decode_peq(out)[5]["gain_db"] == -6.0
+
+
 def test_decode_geq_roundtrips_a_single_band():
     """Bygg en dump med bara ett band satt, avkoda tillbaka samma dB."""
     payload = bytearray(10 + 12100)                     # header + nollor
     payload[5:8] = b"\x4f\x0a\x40"
-    # band 5 vänster (63 Hz) = -8 dB -> s = -32; MSB-först i bit-strömmen
-    n, s = 5, dsp8000.db_to_cc(-8.0) - 64
+    # band 5 vänster (63 Hz) = -8 dB -> s = -16 (0,5 dB/enhet); MSB-först
+    n, s = 5, syx_tools.geq_value(-8.0) - 256
     for i in range(8):
         bit = (s >> (7 - i)) & 1
         pos = syx_tools.GEQ_BIT_OFFSET + 8 * n + i
@@ -472,7 +540,7 @@ def test_patch_dump_roundtrips_and_stays_7bit():
     here = Path(__file__).parent
     base = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
     L = [0.0] * 31; L[5] = -8.0; L[17] = 3.0          # 63 Hz, 1 kHz
-    R = [0.0] * 31; R[0] = -16.0; R[30] = 15.75       # 20 Hz, 20 kHz
+    R = [0.0] * 31; R[0] = -16.0; R[30] = 16.0        # 20 Hz, 20 kHz (enhetens gränser)
     peqs = [{"freq_hz": 1000, "bw_oct": 1.0, "gain_db": -6.0}, None,
             None, None, None, {"freq_hz": 80, "bw_oct": 0.5, "gain_db": 4.0}]
     out = syx_tools.patch_dump(base, geq_L=L, geq_R=R, peqs=peqs)

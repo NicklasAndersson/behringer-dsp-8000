@@ -5,7 +5,7 @@ ingen MIDI. Dump-layouten i detalj: docs/midi.md avsnitt 6.
 
     python syx_tools.py hex  dump.syx [--start 0 --length 256]
     python syx_tools.py eq   dump.syx            # 31+31 grafiska band + de 6 PEQ-filtren
-    python syx_tools.py diff a.syx b.syx         # råa byte + GEQ/PEQ som ändrats
+    python syx_tools.py diff a.syx b.syx         # råa byte, GEQ/PEQ + ändrade bit-spann
 
 patch_dump() gör inversen av decode_*: skriver in GEQ-band och PEQ-poster i
 en befintlig dump (allt annat - header, master, okartlagda block - bevaras),
@@ -15,14 +15,18 @@ SND MEMORY DUMP / SysEx-svar (`F0 00 20 32 00 01 4F 0A|12 …  F7`):
   * 10-byte header, sedan 12100 databyte, alla < 128 (7-bit-safe) men BIT-PACKAT.
     Databyten packas MSB-först till en bitström; fälten läses ur den. Verifierat
     mot enheten 2026-09-02 (`probe`, `probe --manual`). Samma för 4F 0A / 4F 12.
-  * GEQ: från bit GEQ_BIT_OFFSET, 64 tecknade 8-bitarsvärden — 31 vä band
-    (20 Hz–20 kHz), vä master, 31 hö band, hö master. Värde = CC − 64 =
-    kvarts-dB ⇒ −16,00…+15,75 dB (dB = värde / 4).
+  * GEQ: från bit GEQ_BIT_OFFSET (372), 64 tecknade 8-bitarsvärden — 31 vä band
+    (20 Hz–20 kHz), vä master, 31 hö band, hö master. **0,5 dB per enhet**
+    (dB = värde / 2, ±16 dB = ±32) — enhetens egna steg, inte CC:ts 0,25 dB.
   * PEQ: 6 poster à 32 bitar från bit PEQ_BIT_OFFSET, ordning L1 R1 L2 R2 L3 R3.
     Per post: frekvens (11 bit, f = 20·10^(raw/640) Hz, 20 Hz = 0),
-    bandbredd (10 bit, (raw+1)/60 oktav), gain (11-bit tvåkomplement, dB = raw/16).
-    OFF = posten helt noll. Läget PAR/AUT/SGL lagras INTE i dumpen.
-  * Resten (master-skala, delay, gate, limiter, 100 program) är inte kartlagt.
+    bandbredd (10 bit, (raw+1)/60 oktav), gain (10-bit tvåkomplement, dB = raw/8).
+    Postens sista bit tillhör nästa (okartlagda) block - skriv den inte.
+    Filtrens PÅ/AV och läge (PAR/AUT/SGL) lagras INTE i dumpen (verifierat
+    2026-09-03: slå på PEQ för hand ändrar inte en enda byte).
+  * Master (index 31 och 63) har samma skala som banden, verifierat 2026-09-03
+    (−0,5 dB -> −1, +1 dB -> +2). decode_geq returnerar den rått.
+  * Resten (delay, gate, limiter, 100 program) är inte kartlagt.
 """
 import argparse
 from pathlib import Path
@@ -30,10 +34,12 @@ from pathlib import Path
 import dsp8000
 
 DUMP_HEADER_LEN = 10          # 00 20 32 00 01 4F xx yy 20 00
-GEQ_BIT_OFFSET = 373          # bit-offset till första bandet i den MSB-packade strömmen
+GEQ_BIT_OFFSET = 372          # bit-offset till första bandet i den MSB-packade strömmen
+GEQ_DB_PER_UNIT = 0.5         # dumpens steg (INTE CC:ts 0,25 dB) - verifierat 2026-09-03
 GEQ_COUNT = 64               # 31 vä band + vä master + 31 hö band + hö master
 PEQ_BIT_OFFSET = 87          # bit-offset till första PEQ-posten (L1)
-PEQ_REC_BITS = 32            # bitar per PEQ-post
+PEQ_REC_BITS = 32            # bitar per PEQ-post (11 frekvens + 10 bandbredd + 10 gain + 1 oanvänd)
+PEQ_GAIN_BITS = 10           # gain-fältets bredd; den 32:a biten tillhör NÄSTA block
 PEQ_LABELS = ["L1", "R1", "L2", "R2", "L3", "R3"]
 
 
@@ -55,7 +61,8 @@ def _msb_bits(data):
 
 def decode_geq(b):
     """Komplett SysEx (med F0/F7) -> {'L': [31 dB], 'L_master': v, 'R': [...], 'R_master': v}.
-    dB, redan delat med 4. master returneras rått (CC-lik skala, ej verifierad)."""
+    dB, redan skalat. master returneras rått i samma skala (0,5 dB/enhet)
+    - multiplicera med GEQ_DB_PER_UNIT för dB."""
     bits = _msb_bits(b[1 + DUMP_HEADER_LEN:-1])
     vals = []
     for n in range(GEQ_COUNT):
@@ -64,8 +71,8 @@ def decode_geq(b):
         for i in range(8):
             v = (v << 1) | bits[p + i]
         vals.append(v - 256 if v >= 128 else v)
-    return {"L": [v / 4 for v in vals[:31]], "L_master": vals[31],
-            "R": [v / 4 for v in vals[32:63]], "R_master": vals[63]}
+    return {"L": [v * GEQ_DB_PER_UNIT for v in vals[:31]], "L_master": vals[31],
+            "R": [v * GEQ_DB_PER_UNIT for v in vals[32:63]], "R_master": vals[63]}
 
 
 def _read_uint(bits, pos, width):
@@ -84,17 +91,59 @@ def decode_peq(b):
         base = PEQ_BIT_OFFSET + PEQ_REC_BITS * k
         fr = _read_uint(bits, base, 11)
         bw = _read_uint(bits, base + 11, 10)
-        g = _read_uint(bits, base + 21, 11)
-        g = g - 2048 if g >= 1024 else g
+        g = _read_uint(bits, base + 21, PEQ_GAIN_BITS)
+        g = g - 1024 if g >= 512 else g
         out.append({
             "freq_hz": 20.0 * 10 ** (fr / 640),
             "bw_oct": (bw + 1) / 60,
-            "gain_db": g / 16,
-            # ponytail: |gain| < 0,5 dB (ett enhetssteg) med freq/bw 0 = brus, inte ett
-            # filter. 4F 12-dumpar har bit 278 satt även med PEQ OFF (docs/midi.md 6.4).
-            "on": bool(fr or bw or abs(g) >= 8),
+            "gain_db": g / 8,
+            "on": bool(fr or bw or g),
         })
     return out
+
+
+def bit_diff(a, b, gap=8):
+    """Bit-spann som skiljer två dumpar: [(start, bredd, före, efter)].
+
+    Databyten är bit-packade, så ett fält ligger sällan på byte-gränser - en
+    byte-diff pekar ut fel ställe. Bit-offset här är samma skala som
+    GEQ_BIT_OFFSET/PEQ_BIT_OFFSET och docs/midi.md 6.4. Spann med färre än
+    `gap` oförändrade bitar emellan slås ihop (ett fält som byter värde rör
+    sällan alla sina bitar). Verktyget för att kartlägga nya fält: dumpa,
+    ändra EN sak, dumpa, se vilket spann som rörde sig."""
+    x = _msb_bits(a[1 + DUMP_HEADER_LEN:-1])
+    y = _msb_bits(b[1 + DUMP_HEADER_LEN:-1])
+    spans = []
+    for i in range(min(len(x), len(y))):
+        if x[i] == y[i]:
+            continue
+        if spans and i - spans[-1][1] < gap:
+            spans[-1][1] = i + 1
+        else:
+            spans.append([i, i + 1])
+    return [(s, e - s, _read_uint(x, s, e - s), _read_uint(y, s, e - s))
+            for s, e in spans]
+
+
+def bit_label(start):
+    """Vilket känt block en bit-position ligger i - 'okänt' = kandidat till
+    ett nytt fält (delay, limiter, gate, program ...)."""
+    n = (start - GEQ_BIT_OFFSET) // 8
+    if 0 <= n < GEQ_COUNT:
+        band = n % 32
+        ch = "L" if n < 32 else "R"
+        return f"GEQ {ch} " + (f"{dsp8000.ISO_BANDS[band]:g} Hz" if band < 31 else "master")
+    k = (start - PEQ_BIT_OFFSET) // PEQ_REC_BITS
+    if 0 <= k < len(PEQ_LABELS):
+        return f"PEQ {PEQ_LABELS[k]}"
+    return "okänt"
+
+
+def print_bit_diff(a, b):
+    for start, width, x, y in bit_diff(a, b):
+        d = start // 7
+        print(f"  bit {start}-{start + width - 1} ({width} b, data[{d}]): "
+              f"{x} -> {y}   ({bit_label(start)})")
 
 
 def _set_bits(data, pos, width, value):
@@ -111,8 +160,9 @@ def _set_bits(data, pos, width, value):
 
 
 def geq_value(db):
-    """dB -> det tecknade 8-bitarsvärde dumpen lagrar (CC - 64, kvarts-dB)."""
-    return (dsp8000.db_to_cc(db) - 64) & 0xFF
+    """dB -> det tecknade 8-bitarsvärde dumpen lagrar (0,5 dB/enhet, ±16 dB = ±32).
+    OBS: inte samma skala som CC (0,25 dB/steg) - enheten lagrar halva."""
+    return max(-32, min(32, round(db / GEQ_DB_PER_UNIT))) & 0xFF
 
 
 def peq_raw(freq_hz, bw_oct, gain_db):
@@ -121,7 +171,7 @@ def peq_raw(freq_hz, bw_oct, gain_db):
     import math
     fr = max(0, min(2047, round(640 * math.log10(max(freq_hz, 20) / 20))))
     bw = max(0, min(1023, round(bw_oct * 60) - 1))
-    g = max(-1024, min(1023, round(gain_db * 16))) & 0x7FF
+    g = max(-512, min(511, round(gain_db * 8))) & 0x3FF
     return fr, bw, g
 
 
@@ -134,7 +184,8 @@ def patch_dump(base, geq_L=None, geq_R=None, peqs=None):
     peqs:   lista med 6 poster i ordning L1 R1 L2 R2 L3 R3, var och en None (=OFF,
             nollställs) eller {'freq_hz','bw_oct','gain_db'}. None hela listan = rör inte PEQ.
 
-    Master lämnas orört (skalan är inte verifierad). 7-bit-safe: se _set_bits."""
+    Master lämnas orört - avsiktligt: en rumskorrigering ska inte flytta
+    utnivån. (Skalan är känd sedan 2026-09-03.) 7-bit-safe: se _set_bits."""
     if not is_memory_dump(base):
         raise SystemExit("patch_dump: base är inte en minnesdump (F0 00 20 32 00 01 4F …).")
     data = bytearray(base[1 + DUMP_HEADER_LEN:-1])
@@ -155,7 +206,7 @@ def patch_dump(base, geq_L=None, geq_R=None, peqs=None):
                          else peq_raw(rec["freq_hz"], rec["bw_oct"], rec["gain_db"]))
             _set_bits(data, base_bit, 11, fr)
             _set_bits(data, base_bit + 11, 10, bw)
-            _set_bits(data, base_bit + 21, 11, g)
+            _set_bits(data, base_bit + 21, PEQ_GAIN_BITS, g)   # rör inte postens 32:a bit
     return base[:1 + DUMP_HEADER_LEN] + bytes(data) + base[-1:]
 
 
@@ -231,6 +282,8 @@ def cmd_diff(args):
                 print(f"  PEQ {lbl}: {peq_str(x)}  ->  {peq_str(y)}")
         if not hit:
             print("  (inga - ändringen ligger utanför GEQ/PEQ-blocken)")
+        print("\nÄndrade bit-spann (bit-offset som i docs/midi.md 6.4):")
+        print_bit_diff(a, b)
 
 
 def main():

@@ -155,13 +155,18 @@ per byte, till en bitström som fälten läses ur.
 | Okänt (arbetsbuffert) | 0–86 | 0–12 | lika i alla dumpar; kandidat: limiter/gate/delay/flaggor |
 | **PEQ** | 87–278 | 12–39 | 6 poster à 32 bitar, ordning L1 R1 L2 R2 L3 R3 |
 | Okänt mönster | ~278–340 | 39–47 | satt i knapp-dumpar, noll i förfrågnings-dumpar |
-| **GEQ** | 373–884 | 53–126 | 64 tecknade 8-bitarsvärden: 31 vä band, vä master, 31 hö, hö master |
+| **GEQ** | 372–883 | 53–126 | 64 tecknade 8-bitarsvärden: 31 vä band, vä master, 31 hö, hö master |
 | Resten | 885– | 127– | **ej kartlagt** (delay, gate, limiter, de 100 programmen …) |
 
-GEQ-värde = `CC − 64`, alltså kvarts-dB: `dB = värde / 4`.
+GEQ-värde: **0,5 dB per enhet**, `dB = värde / 2`, ±32 = ±16 dB – enhetens
+egna steg, alltså halva CC-skalans upplösning. Master (index 31 och 63) ligger
+i samma block och på samma skala. Blocket låg felkartlagt på bit 373/kvarts-dB
+fram till 2026-09-03; rättelsen och vad felet ställde till med står i
+[docs/midi.md 6.4](docs/midi.md#64-avkodad-layout-verifierad-med-probe--probe---manual).
 
 PEQ-post, 32 bitar: frekvens 11 bitar (`f = 20 · 10^(raw/640)` Hz), bandbredd
-10 bitar (`(raw+1)/60` oktav), gain 11 bitar tvåkomplement (`dB = raw/16`).
+10 bitar (`(raw+1)/60` oktav), gain 10 bitar tvåkomplement (`dB = raw/8`).
+Postens sista bit tillhör nästa block och skrivs inte.
 OFF = posten helt noll. Verifierat mot 6 filter satta för hand på enheten.
 
 ### Skriva allt: RCV MEMORY DUMP
@@ -218,22 +223,22 @@ knapptryck på enheten och två dumpar.
 
 ### Skrivvägen
 
-- **PEQ-läget PAR/AUT/SGL ligger inte i dumpen** (SGL == PAR där). Efter en
-  dump-skrivning: bearbetar filtren faktiskt ljudet, eller måste läget sättas
-  för hand på PEQ-sidan? Avgörs med en REW-sweep eller en blick på displayen.
-  **Detta är den viktigaste öppna frågan** – utan svar vet man inte om
-  PEQ-skrivningen är komplett.
+- ~~**PEQ-läget PAR/AUT/SGL ligger inte i dumpen**~~ **Avgjort 2026-09-03:** varken
+  läget *eller* på/av ligger i dumpen. En `apply` skrevs med PEQ av, PEQ slogs på
+  för hand, ny dump hämtades – **noll byte skiljde**. Dumpen bär filtrens värden;
+  inkopplingen sker på fronten. Kvar: slå på PEQ efter varje dump-skrivning.
 - **Arbetsbuffert kontra programminne.** Readback läser arbetsbufferten och
   den stämmer, men syns en pushad dump direkt på displayen eller först efter
   en Program Change? Och skrivs de 100 programplatserna över?
 - **Blockerar PROTECT MEM?** Testat bara med skyddet av.
-- **Master-fadern.** CC-skalan antas vara samma som bandens men är inte
-  verifierad, och dumpens master-byte returneras rått. Därför skriver `apply`
-  aldrig master.
-- **Röd overflow-LED efter en skrivning.** Hände en gång, med en skev basdump
-  (`4F 04`). Vilken byte som orsakade det, och om den nya ordningen (egen ren
-  avläsning som bas) faktiskt gör slut på problemet, är inte verifierat på
-  hårdvara.
+- **Master-fadern:** ~~skalan okänd~~ **avklarad 2026-09-03** – samma skala som
+  banden (0,5 dB/enhet), index 31 och 63. `apply` skriver ändå inte master: en
+  rumskorrigering ska inte flytta utnivån.
+- ~~**Röd overflow-LED efter en skrivning.**~~ **Förklarad 2026-09-03:** GEQ-blocket
+  låg en bit fel i `patch_dump`, så varje sänkning skrevs som en stor höjning
+  (−1 dB blev +63 dB, 28 av 62 band över +16 dB). Rättat och låst av ett test
+  mot hårdvarudumpen `dumps/dsp8000_sysex_edges.syx`. **Kvar att verifiera på
+  hårdvara:** att en `apply` nu ger tyst, korrekt EQ och ingen röd LED.
 
 ### MIDI-detaljer
 

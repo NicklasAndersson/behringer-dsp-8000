@@ -11,8 +11,8 @@ history/
 rew_eq_suggestion_*.json
 
 # äldre platser (skript skriver inte hit längre, men gamla filer kan ligga kvar)
-dsp8000_config.html
-dsp8000_applied.syx
-dsp8000_sysex_*.syx
-probe_*.syx
-roundtrip_*.syx
+/dsp8000_config.html
+/dsp8000_applied.syx
+/dsp8000_sysex_*.syx
+/probe_*.syx
+/roundtrip_*.syx

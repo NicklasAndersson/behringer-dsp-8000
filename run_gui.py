@@ -684,7 +684,7 @@ let curBase = null;                 // avkodad vald bas-dump {name, geq_L, ...}
 function setEditorFrom(s) { $('editorFrom').textContent = 'Redigeraren: ' + s; }
 function showBase(d) {
   [0,1,2].forEach(i => $('pnow'+i).textContent = d ? peqStr(d.peq[i]) : '–');
-  $('master').textContent = d ? `Bas-master L ${d.master_L}, R ${d.master_R} (rått)` : ' ';
+  $('master').textContent = d ? `Bas-master L ${(d.master_L/2).toFixed(2)} dB, R ${(d.master_R/2).toFixed(2)} dB (skrivs inte)` : ' ';
   $('baseInfo').textContent = d ? d.summary : '';
   drawCurve();
 }

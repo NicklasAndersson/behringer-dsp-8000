@@ -38,6 +38,7 @@ Användning:
 """
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -174,7 +175,7 @@ def _grab_with_retry(out, inp, label):
             raise SystemExit("Avbrutet.")
 
 
-GEQ_DATA_SPAN = (52, 128)   # data-offset-spann för GEQ-blocket (bit 373 .. 373+64*8, /7)
+GEQ_DATA_SPAN = (53, 127)   # data-offset-spann för GEQ-blocket (bit 372 .. 372+64*8, /7)
 PEQ_DATA_SPAN = (12, 40)    # data-offset-spann för de 6 PEQ-posterna (bit 87 .. 87+6*32=279, /7)
 
 
@@ -193,7 +194,8 @@ def _report_dump_diff(before, after):
     print(f"\n{len(diff)} byte ändrades:")
     for i in diff:
         d = i - hdr
-        where = next((name for name, (lo, hi) in spans if lo <= d < hi), "utanför GEQ/PEQ")
+        where = ("header" if d < 0 else
+                 next((name for name, (lo, hi) in spans if lo <= d < hi), "utanför GEQ/PEQ"))
         print(f"  data[{d:5d}]  {before[i]:3d} -> {after[i]:3d}   ({where})")
     ga = syx_tools.decode_geq(b"\xf0" + before + b"\xf7")
     gb = syx_tools.decode_geq(b"\xf0" + after + b"\xf7")
@@ -201,11 +203,17 @@ def _report_dump_diff(before, after):
         for j, (x, y) in enumerate(zip(ga[name], gb[name])):
             if x != y:
                 print(f"  GEQ {name} {dsp8000.ISO_BANDS[j]:g} Hz: {x:+.2f} -> {y:+.2f} dB")
+        x, y = ga[name + "_master"], gb[name + "_master"]
+        if x != y:
+            print(f"  GEQ {name} master: {x * syx_tools.GEQ_DB_PER_UNIT:+.2f} -> "
+                  f"{y * syx_tools.GEQ_DB_PER_UNIT:+.2f} dB  (rått {x} -> {y})")
     pa = syx_tools.decode_peq(b"\xf0" + before + b"\xf7")
     pb = syx_tools.decode_peq(b"\xf0" + after + b"\xf7")
     for lbl, x, y in zip(syx_tools.PEQ_LABELS, pa, pb):
         if x != y:
             print(f"  PEQ {lbl}: {syx_tools.peq_str(x)}  ->  {syx_tools.peq_str(y)}")
+    print("\nÄndrade bit-spann (bit-offset som i docs/midi.md 6.4):")
+    syx_tools.print_bit_diff(b"\xf0" + before + b"\xf7", b"\xf0" + after + b"\xf7")
 
 
 def grab(path):
@@ -218,7 +226,7 @@ def grab(path):
 
 
 def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
-               manual=False):
+               manual=False, cc=None, note=None):
     """Kontrollerad capture: dumpa, ändra EN sak, dumpa igen, visa vilka byte
     + GEQ-band som ändrades. Kartlägger den packade dumpens layout.
 
@@ -226,23 +234,29 @@ def probe_band(band_freq, value, channel="left", midi_channel=1, restore=64,
         skicka tillbaka efteråt, 64 = 0 dB, None = lämna kvar).
     manual=True:  ingen CC - skriptet pausar och du gör EN ändring på enheten
         själv (PEQ-gain, delay, gate ...). Så kartläggs de delar som inte går
-        via MIDI. Enheten hamnar inte tillbaka automatiskt."""
+        via MIDI. Enheten hamnar inte tillbaka automatiskt.
+    cc=N:         skicka CC N i stället för att slå upp --band, för det som
+        inte är ett ISO-band: 31 = vä master, 63 = hö master."""
     ts = time.strftime("%H%M%S")
     if manual:
-        before_f = paths.new(paths.CAPTURES, f"probe-manual-before-{ts}.syx")
-        after_f = paths.new(paths.CAPTURES, f"probe-manual-after-{ts}.syx")
+        # --note hamnar i filnamnet: annars är en serie probes bara tidsstämplar
+        slug = "-" + re.sub(r"[^a-z0-9]+", "-", note.lower()).strip("-") if note else ""
+        before_f = paths.new(paths.CAPTURES, f"probe-manual{slug}-before-{ts}.syx")
+        after_f = paths.new(paths.CAPTURES, f"probe-manual{slug}-after-{ts}.syx")
     else:
-        cc_num = cc_map(channel)[band_freq]
-        before_f = paths.new(paths.CAPTURES, f"probe-{band_freq:g}Hz-{channel}-before-{ts}.syx")
-        after_f = paths.new(paths.CAPTURES, f"probe-{band_freq:g}Hz-{channel}-after-cc{value}-{ts}.syx")
+        cc_num = cc_map(channel)[band_freq] if cc is None else cc
+        tag = f"cc{cc_num}" if cc is not None else f"{band_freq:g}Hz-{channel}"
+        before_f = paths.new(paths.CAPTURES, f"probe-{tag}-before-{ts}.syx")
+        after_f = paths.new(paths.CAPTURES, f"probe-{tag}-after-cc{value}-{ts}.syx")
     with open_output() as out, open_input() as inp:
         before = _grab_with_retry(out, inp, "Dump 1/2 (före)")
         if manual:
-            input("  Gör EN ändring på enheten nu (t.ex. PEQ 1 gain -6 dB), "
+            input(f"  Gör EN ändring på enheten nu ({note or 't.ex. PEQ 1 gain -6 dB'}), "
                   "tryck Enter när klar: ")
         else:
-            print(f"  CC {cc_num} = {value}  ({band_freq:g} Hz {channel}, "
-                  f"{dsp8000.cc_to_db(value):+.2f} dB)")
+            what = f"CC {cc_num}" if cc is not None else f"{band_freq:g} Hz {channel}"
+            print(f"  CC {cc_num} = {value}  ({what}, "
+                  f"{dsp8000.cc_to_db(value):+.2f} dB om bandskalan gäller)")
             out.send(mido.Message("control_change", channel=midi_channel - 1,
                                   control=cc_num, value=value))
             time.sleep(0.3)
@@ -714,6 +728,11 @@ def main():
                     metavar="1-16")
     pb.add_argument("--no-restore", action="store_true",
                     help="lämna bandet på --value i stället för att skicka 0 dB")
+    pb.add_argument("--cc", type=int, metavar="0-127",
+                    help="skicka det här CC-numret i stället för --band "
+                         "(31 = vä master, 63 = hö master)")
+    pb.add_argument("--note", metavar="TEXT",
+                    help="vad du ändrar - hamnar i filnamnet (med --manual)")
     pb.add_argument("--manual", action="store_true",
                     help="ingen CC - pausa och gör ändringen på enheten själv (PEQ m.m.)")
     ap_ = sub.add_parser("apply")
@@ -759,7 +778,8 @@ def main():
         push(args.path, args.send_only)
     elif args.cmd == "probe":
         probe_band(args.band, args.value, args.channel, args.midi_channel,
-                   restore=None if args.no_restore else 64, manual=args.manual)
+                   restore=None if args.no_restore else 64, manual=args.manual,
+                   cc=args.cc, note=args.note)
     elif args.cmd == "apply":
         apply(args.base, args.dry_run)
     elif args.cmd == "roundtrip":

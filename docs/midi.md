@@ -26,7 +26,7 @@ USB som MIDI-interface. Det som *inte* är testat står uttryckligen markerat.
 | Fader-rörelse → läsbar GEQ-status (`33 09`) | DSP → dator | **fungerar** |
 | Läsa GEQ + PEQ ur dumpen | – | **avkodat** (`syx_tools.py eq`, `rew_to_dsp8000.py readback`) |
 | RCV MEMORY DUMP (ladda en dump tillbaka) | dator → DSP | **fungerar med knapptryck** – tryck + på RCV MEMORY DUMP precis före sändning; utan det landar inget (2026-09-03). `push` / `apply` / `roundtrip`, avsnitt 4 |
-| Skriva GEQ + PEQ via dump | dator → DSP | **verifierat** (`roundtrip` 2026-09-03: ramp + 3 PEQ-filter skrevs och lästes tillbaka exakt). PEQ-*läget* (PAR/AUT/SGL) ligger dock inte i dumpen. Master/delay/gate/limiter: samma väg, bitfälten inte kartlagda |
+| Skriva GEQ + PEQ via dump | dator → DSP | **verifierat 2026-09-03** – återläsningen är byte-identisk med det vi skickade. GEQ-blocket låg felkartlagt fram till dess (6.4); master och PEQ-läget skrivs inte alls. Delay/gate/limiter: samma väg, bitfälten inte kartlagda |
 | ADRStudio:s granulära DSP8024-SysEx | – | **dött** på DSP8000 (bilaga A) |
 
 Returvägen kräver **båda** MIDI-kablarna (interface OUT → DSP IN *och*
@@ -122,9 +122,8 @@ avkodade (avsnitt 6.4), så vi kan patcha en dump och pusha tillbaka den (`apply
 
 **Fortfarande inte fastställt:**
 
-1. PEQ-läget PAR/AUT/SGL ligger inte i dumpen (6.4) – bearbetar filtren ljudet
-   efter en dump-skrivning, eller måste läget sättas för hand? Kolla PEQ-sidan
-   eller kör en REW-sweep.
+1. ~~PEQ-läget~~ **avgjort 2026-09-03:** varken läge eller på/av ligger i dumpen
+   (6.4) – slå på PEQ från fronten efter en dump-skrivning.
 2. Arbetsbuffert kontra programminne: syns en pushad dump direkt på displayen,
    eller först efter Program Change? (Readback läser arbetsbufferten och den
    stämde, så åtminstone den skrivs.)
@@ -182,7 +181,8 @@ Program Change:  Cn pp       pp = program 0–99 (displayen visar 1–100)
 men GEQ:n har 0,5 dB-upplösning så enheten rundar. `dsp8000.db_to_cc` /
 `cc_to_db` implementerar detta.
 
-**Master-fadern** tar CC 0–127 men skalan är inte verifierad (troligen samma).
+**Master-fadern** tar CC 0–127 på samma skala som banden (dumpen visar
+−0,5 dB → −1 och +0,5 dB → +1, avsnitt 6.4).
 
 **Stereolink** på enheten: då räcker vänsterkanalen (`send --channel left`).
 Med Stereolink av skickar `send` båda (default).
@@ -258,6 +258,12 @@ F0  00 20 32 00 01 4F <sub> <flag> 20 00  <12100 databyte>  F7      = 12112 byte
 | SND MEMORY DUMP-knappen | `12` | `00` |
 | `70`-förfrågan | `0A` | `40` |
 
+**Sub-koden säger inte hur dumpen togs.** 2026-09-03 gav två `70`-förfrågningar
+(GUI:ts läsning, 43 s isär) `02 40` respektive `12 00` – samma par som
+knapp-dumpen. Sedan tidigare finns även `0A 40` och `04`. Byte 7 verkar vara
+ett flaggfält (bitarna `08`/`10` varierar, `02` alltid satt), inte en
+källmarkör. Låt `is_memory_dump` fortsätta titta på `4F`, inte på sub-koden.
+
 - Databyten är alla < 128 (7-bit-safe) men **bit-packade**: de packas upp
   MSB-först, 7 bitar per byte, till en bitström som fälten läses ur.
 - **Offset-konvention:** *data-offset* = index i de 12100 databytena.
@@ -278,11 +284,26 @@ F0  00 20 32 00 01 4F <sub> <flag> 20 00  <12100 databyte>  F7      = 12112 byte
 | Okänt (arbetsbuffert) | 0–86 | 0–12 | `80 36 00 00 00 02 33 16 00 00 …` – lika i alla dumpar. Kandidat: limiter/gate/delay/flaggor |
 | **PEQ** | 87–278 | 12–39 | 6 poster à 32 bitar, ordning **L1 R1 L2 R2 L3 R3** (nedan) |
 | Okänt mönster | ~278–340 | 39–47 | `02 09 54 68 00 17 40 06 10` i `4F 12`-dumpar, noll i `4F 0A`. Återkommer vid data 199–207 |
-| **GEQ** | 373–884 | 53–126 | 64 tecknade 8-bitarsvärden: 31 vä band, vä master, 31 hö band, hö master |
+| **GEQ** | 372–883 | 53–126 | 64 tecknade 8-bitarsvärden: 31 vä band, vä master, 31 hö band, hö master |
 | Resten | 885– | 127– | ej kartlagt (delay, gate, limiter, 100 program …) |
 
-**GEQ-värde** = CC − 64, dvs. kvarts-dB: `dB = värde / 4`, −64…+63 ⇒
-−16,00…+15,75 dB. Master returneras rått (0-centrerat, skala ej verifierad).
+**GEQ-värde: 0,5 dB per enhet** – `dB = värde / 2`, ±32 ⇒ ±16,0 dB, alltså
+enhetens egna 0,5 dB-steg. **Inte** CC-skalan: CC har 0,25 dB/steg
+(`CC = 64 + dB×4`, verifierad mot displayen) och enheten halverar när den
+lagrar. Dumpens värde = (CC − 64) / 2.
+
+**Master** (index 31 och 63, bit 620–627 och 876–883) har exakt samma skala
+som banden. `decode_geq` returnerar master rått – multiplicera med 0,5 för dB.
+`apply` skriver ändå inte master: en rumskorrigering ska inte flytta utnivån.
+
+> **Rättelse 2026-09-03.** Fram till nu stod här bit 373 och kvarts-dB. Det var
+> en bit fel, och felet tog ut sig självt vid avläsning (ett steg åt vänster
+> ⇒ dubbla värdet ⇒ samma dB) så länge *nästa* fält var positivt. Vid
+> **skrivning** tog det inte ut sig: `patch_dump` la varje bands teckenbit i
+> grannens LSB och nollade bandets egen teckenbit, så varje **sänkning blev en
+> stor höjning** (−1 dB skrevs som +63 dB). Det var det som fick IN/OUT att
+> blinka rött efter en GUI-skrivning. Fixat; låst av
+> `test_geq_offset_and_scale_against_hardware` mot `dumps/dsp8000_sysex_edges.syx`.
 
 **PEQ-post (32 bitar):**
 
@@ -290,21 +311,28 @@ F0  00 20 32 00 01 4F <sub> <flag> 20 00  <12100 databyte>  F7      = 12112 byte
 |---|---|---|
 | frekvens | 11 | `f = 20 · 10^(raw/640)` Hz (20 Hz = 0, 20 kHz = 1920) |
 | bandbredd | 10 | `(raw + 1) / 60` oktav |
-| gain | 11 | tvåkomplement, `dB = raw / 16` |
+| gain | 10 | tvåkomplement, `dB = raw / 8` |
+| (oanvänd) | 1 | postens sista bit – **tillhör nästa block, skriv den inte** |
 
-OFF = posten helt noll. Läget PAR/AUT/SGL lagras **inte** (SGL == PAR i
-dumpen). Verifierat 2026-09-02: 6 filter satta till −6/+1/−2/+16/+12/+6 dB på
-enheten → exakt match i avkodningen.
+Posten helt noll = inga värden satta. Verifierat 2026-09-02: 6 filter satta
+till −6/+1/−2/+16/+12/+6 dB på enheten → exakt match i avkodningen.
 
-**Förbehåll om gain-fältets LSB:** alla testvärden var hela 0,5 dB-steg, dvs.
-de tre lägsta gain-bitarna var alltid 0. I `4F 12`-dumparna är bit 278 (sista
-biten i R3:s gain) satt även med PEQ OFF, direkt följt av 9-byte-mönstret
-ovan. Så antingen är gain-fältet 10 bitar (1/8 dB) och bit 278 tillhör nästa
-fält, eller så är arbetsbufferten i knapp-dumpen bara annorlunda. `decode_peq`
-räknar en post som OFF om |gain| < 0,5 dB och frekvens/bandbredd är noll, så
-det syns inte i utskriften. Avgörs med en `probe --manual` där ett PEQ-filter
-sätts till ett udda värde och dumpen tas med **knappen** (`monitor`) i stället
-för förfrågan.
+**Filtrens PÅ/AV och läge (OFF/PAR/AUT/SGL) ligger inte i dumpen.** Verifierat
+2026-09-03: en `apply` skrevs med PEQ avslaget, PEQ slogs sedan på för hand på
+enheten och en ny dump hämtades – **noll byte skiljde**. Dumpen bär filtrens
+*värden*, inte om de är inkopplade. Efter en dump-skrivning måste PEQ alltså
+slås på från fronten.
+
+**Gain-fältet är 10 bitar, inte 11** (rättat 2026-09-03). Båda bredderna ger
+samma dB för alla handsatta testvärden (10 bitar med `raw/8` ⇔ 11 bitar med
+`raw/16`), men i `dumps/dsp8000_sysex_0db.syx` och `_p16db.syx` – där PEQ-posterna
+är helt orörda – är bit 278 ändå satt. Under 11-bitarsmodellen vore det en
+gain på +1/16 dB i ett tomt filter; under 10-bitarsmodellen är det första biten
+i 9-byte-mönstret som börjar på data 39. `patch_dump` skriver därför bara 10
+bitar och lämnar postens sista bit i fred (`test_patch_dump_leaves_the_bit_after_the_peq_gain_alone`).
+Samma off-by-one-fälla som GEQ-blocket hade, men här höll offset 87: enhetens
+egen dump med ett handsatt **−2 dB**-filter avkodas rätt på 87 och som +126 dB
+på 86 – ett negativt värde vid en fältgräns är det som avgör.
 
 ### 6.5 Fader-statusframe (skickas vid fader-rörelse)
 
@@ -322,9 +350,36 @@ men kräver att någon rör en fader – `monitor` skriver ut den i dB.
 | `dsp8000_sysex_0db.syx` | `4F 12` | alla 62 GEQ-band 0 dB, PEQ OFF | `test_rew_script.py` |
 | `dsp8000_sysex_p16db.syx` | `4F 12` | alla 62 GEQ-band +16 dB, PEQ OFF | `test_rew_script.py`, `push`-test |
 | `dsp8000_sysex_ondemand.syx` | `4F 0A` | verklig EQ-kurva från REW-körning, PEQ OFF | exempel på förfrågnings-dump |
+| `dsp8000_sysex_edges.syx` | `4F 12` | 20 Hz, 20 kHz och master satta för hand: L −0,5 dB, R +0,5 dB, allt annat 0 | `test_rew_script.py` – låser GEQ-offset + skala mot hårdvaran |
 
 (En fjärde fil, `_m16db.syx`, var byte-identisk med `_p16db.syx` – en
 felnamngiven capture – och är borttagen.)
+
+### 6.7 Kartlägga fler fält
+
+Recept, ett fält i taget:
+
+1. **Ändra EN sak** och ta två dumpar. Går ändringen via CC:
+   `./run.sh probe --cc 31 --value 40` (dumpa → CC → dumpa → återställ).
+   Annars `./run.sh probe --manual` (dumpa → pausa medan du ändrar på
+   enheten → dumpa).
+2. Läs **bit-spannen** i rapporten, inte byten. Databyten är bit-packade, så
+   ett fält kan ligga tvärs över en byte-gräns; `probe` och
+   `syx_tools.py diff` skriver därför ut vilka bit-spann som ändrats, deras
+   råvärde före/efter och vilket känt block de tillhör (`okänt` = nytt fält).
+3. Upprepa med ett andra värde för att få skalan (två punkter ger lutning och
+   tecken; tvåkomplement syns som ett stort råvärde vid negativa dB).
+4. Skriv in fältet i `syx_tools` (`decode_*`/`patch_dump`) och i 6.4.
+
+**Master-fadern** är klar (6.4): samma 0,5 dB-skala som banden, index 31 och
+63. Det avslöjade också att hela GEQ-blocket låg en bit fel – därför punkt 2
+ovan: läs *bit*-spannen, och misstro ett fält som bara råkar ge rätt dB.
+Ett fält som gränsar till ett annat avslöjar sig när grannen är **negativ** –
+sätt därför alltid ett negativt provvärde, inte bara ett positivt.
+
+Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
+0–12 och mönstret vid data 39/199), **PEQ-läget** PAR/AUT/SGL, och
+**programplatserna** (byt program på enheten, diffa).
 
 ---
 
@@ -368,10 +423,56 @@ felnamngiven capture – och är borttagen.)
     fungerar med knapptryck, `4F 0A`-formatet (grabben) duger.
   - Återställningen behöver också knapptryck – `roundtrip` pausar nu för det.
   - Slutsats: den tidigare noteringen "RCV bekräftad utan knapp" var fel.
-- **Öppet:** PEQ-*värden* landar och läses tillbaka, men läget PAR/AUT/SGL ligger
-  inte i dumpen (6.4). Om filtren faktiskt bearbetar ljudet efter en dump-skrivning,
-  eller om läget måste sättas för hand, är inte avgjort – kolla PEQ-sidan på
-  displayen eller kör en REW-sweep.
+- **PEQ-läget avgjort** (`history/writes/applied-20260903-104243.syx` skriven med
+  PEQ av, `history/reads/read-20260903-104416.syx` läst efter att PEQ slagits på
+  för hand): dumparna är **byte-identiska**. Varken på/av eller PAR/AUT/SGL finns
+  i minnesdumpen – bara filtrens värden. PEQ måste alltså kopplas in från fronten
+  efter en dump-skrivning. Samma par visar också att **skrivvägen nu landar exakt**:
+  12112 byte tillbaka, bit för bit lika det vi skickade, med sund EQ (alla band inom
+  ±16 dB på 0,5 dB-rutnätet).
+- **Master rörs inte av en skrivning** – bekräftat på riktig data: basen hade master
+  −8,5 / −8 dB (enhetens eget läge, bekräftat av användaren) och de värdena står kvar
+  efter `apply`. Med den gamla, felskjutna modellen hamnade sista bandets skrivning
+  i masters teckenbit och hade gjort −8,5 dB till **+55,5 dB**; det är nu låst av
+  `test_patch_dump_never_touches_master`.
+- **Master-fadern kartlagd – och hela GEQ-blocket rättat.** Fyra avläsningar:
+  allt 0 dB (`read-…100544`), master L −1 / R +1 (`…100627`), master L −0,5 /
+  R +0,5 (`…102927`), och till sist L −0,5 / R +0,5 på **20 Hz, 20 kHz och
+  master samtidigt** (`…103416`, sparad som `dumps/dsp8000_sysex_edges.syx`).
+  - De två första gav master rätt dB men satte också en bit i grannbandet
+    (20 kHz "+0,25 dB" utan att någon rört 20 kHz). Kontrollprovet med −0,5 dB
+    satte samma bit igen → biten hörde inte till bandet.
+  - Kant-dumpen avgjorde saken: 20 Hz vänster −0,5 dB ligger som **åtta ettor
+    på bit 372–379**, inte 373–380. Alltså börjar GEQ-blocket på **bit 372**
+    och varje värde är **0,5 dB per enhet**, inte 0,25. Alla sex satta värden
+    avkodas nu exakt, och de 56 orörda banden är exakt 0.
+  - **Varför det inte syntes förut:** en bit åt vänster dubblar värdet, och
+    dividerat med 4 i stället för 2 blev dB rätt ändå – så länge nästa fält var
+    positivt. Referensdumparna (allt 0 dB / allt +16 dB) och `roundtrip`
+    (skrev och läste med samma felaktiga modell) kunde därför aldrig fånga det.
+    Det som avslöjade modellen var enhetens *egna* kurvor: 26 av 62 band låg på
+    kvarts-dB-värden som enheten varken kan visa eller ta emot, och tre band
+    stod på −15,75 dB där REW-korrigeringen klipper på exakt −16.
+  - **Konsekvens (allvarlig):** `patch_dump` skrev en bit fel, så varje bands
+    teckenbit hamnade i grannens LSB och bandets egen teckenbit nollades →
+    **alla sänkningar skrevs som stora höjningar**. Sista `apply`-filen
+    (`history/writes/dsp8000_applied.syx`) gav enheten +63 dB där kurvan sa
+    −1 dB; 28 av 62 band hamnade över +16 dB. Det förklarar den röda
+    overflow-LED:en efter GUI-skrivningen (som tidigare skylldes på en skev
+    `4F 04`-basdump). CC-vägen (`send`) var aldrig drabbad – den går genom
+    enhetens egen tolkning.
+  - **Bekräftat på hårdvara, inte bara i teorin:** `history/writes/dsp8000_applied.syx`
+    (det vi skickade) och `history/reads/dsp8000_base.syx` (vad enheten lämnade ut
+    efteråt) har *identiska* GEQ-block, och med rätt modell står det +63 / +58,5 /
+    +60,5 / +62,5 dB där kurvan sa −1 / −5,5 / −3,5 / −1,5. Enheten tog alltså emot
+    och behöll de orimliga värdena – återläsningen "stämde" bara för att den
+    avkodades med samma felaktiga modell som skrev dem.
+  - Fixat i `syx_tools` (`GEQ_BIT_OFFSET = 372`, `GEQ_DB_PER_UNIT = 0,5`) och
+    låst av `test_geq_offset_and_scale_against_hardware` mot kant-dumpen.
+    **Gör om varje `apply`/GUI-skrivning som gjordes före det här.**
+- **Två `70`-förfrågningar gav olika header:** `4F 02 40` och `4F 12 00` (samma
+  enhet, 43 s isär, båda via GUI:ts läsning). Sub-koden är alltså inget bevis
+  för hur dumpen togs – se 6.3.
 - **IN/OUT blinkade rött efter en GUI-skrivning** trots att EQ:n bara innehöll
   sänkningar (rött = intern overflow/clipping, inte EQ-matematik). Basdumpen i det
   fallet hade header `4F 04` (inte `4F 0A`) – grabbad medan enheten inte stod rent
@@ -393,14 +494,15 @@ felnamngiven capture – och är borttagen.)
 | `python rew_to_dsp8000.py readback` | hämtar dumpen och skriver ut 31+31 GEQ-band + 6 PEQ |
 | `python rew_to_dsp8000.py grab FIL.syx` | hämtar dumpen och sparar den |
 | `python rew_to_dsp8000.py probe [--band Hz --value CC --channel left]` | dumpa, sätt ett band via CC, dumpa, diffa (återställer bandet) |
-| `python rew_to_dsp8000.py probe --manual` | dumpa, pausa medan du ändrar EN sak på enheten, dumpa, diffa |
+| `python rew_to_dsp8000.py probe --cc N [--value CC]` | samma men ett rått CC-nummer i stället för ett ISO-band: `--cc 31` = vä master, `--cc 63` = hö master |
+| `python rew_to_dsp8000.py probe --manual [--note TEXT]` | dumpa, pausa medan du ändrar EN sak på enheten, dumpa, diffa. `--note` hamnar i filnamnet |
 | `python rew_to_dsp8000.py push [--send-only] FIL.syx` | skicka en dump till enheten (RCV-test, protokoll i avsnitt 4); dumpar före/efter och diffar. `--send-only`: bara skicka, för loopback-testet av interfacet |
 | `python rew_to_dsp8000.py apply [--dry-run] [--base FIL]` | patcha en dump (färsk eller `--base`) med GEQ + PEQ ur `rew_eq_suggestion.json`, pusha och läs tillbaka. Avsnitt 5b |
 | `python rew_to_dsp8000.py roundtrip [--keep]` | hårdvarutest av dump-vägen: backup → skriv känt GEQ+PEQ-mönster → läs tillbaka + jämför → återställ. Rör inte JSON/CC. Avsnitt 4 |
 | `python rew_to_dsp8000.py calibrate [--band Hz]` | verifiera CC→dB mot displayen |
 | `python rew_to_dsp8000.py send [--dry-run] [--verify] [--channel left\|right\|both]` | skicka de 31 banden ur `rew_eq_suggestion.json` |
 | `python syx_tools.py eq FIL.syx` | avkoda GEQ + PEQ ur en sparad dump (stdlib, ingen MIDI) |
-| `python syx_tools.py diff A.syx B.syx` | råa byte som skiljer + GEQ/PEQ som ändrats |
+| `python syx_tools.py diff A.syx B.syx` | råa byte som skiljer + GEQ/PEQ som ändrats + **ändrade bit-spann** (kartläggning av nya fält) |
 | `python syx_tools.py hex FIL.syx [--start N --length N]` | hexdump |
 | `python syx_tools.py` (modul) `patch_dump(base, geq_L, geq_R, peqs)` | skriv GEQ/PEQ i en dump (inversen av `decode_*`), 7-bit-safe |
 
