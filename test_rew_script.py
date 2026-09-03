@@ -271,12 +271,14 @@ def test_fit_scale_recovers_known_line():
 
 
 def test_geq_status_lines_decodes_fader_frame():
-    hdr = [0, 0x20, 0x32, 0, 1, 0x33, 9]
-    left = [64] * 31 + [15]
-    left[17] = 96                       # 1 kHz = +8 dB
-    right = [64] * 31 + [16]
+    hdr = [0, 0x20, 0x32, 0, 1, 0x33, 9]          # 9 = program 10 på displayen
+    left = [32] * 31 + [15]                          # 32 = 0 dB, master 15 = -8,5 dB (enhetens läge 2026-08-31)
+    left[17] = 48                                    # 1 kHz = +8 dB
+    right = [32] * 31 + [16]
     lines = m.geq_status_lines(bytes(hdr + left + right))
-    assert len(lines) == 2 and "+8.0" in lines[0] and "master=15" in lines[0], lines
+    assert lines[0] == "program 10", lines
+    assert len(lines) == 3 and "+8.0" in lines[1] and "master=-8.5" in lines[1], lines
+    assert "master=-8.0" in lines[2], lines
     assert m.geq_status_lines(bytes(hdr[:5] + [0x4F, 0x12] + [0] * 64)) == []
 
 
@@ -292,7 +294,7 @@ def test_decode_geq_known_dumps():
     raw0 = (here / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
     zero = syx_tools.decode_geq(raw0)
     assert zero["L"] == [0.0] * 31 and zero["R"] == [0.0] * 31, zero
-    # 4F 12-dumpen har bit 278 satt (R3 gain raw 1) - ska ändå visas som OFF
+    # bit 278 (satt i dumpen) är första tecknet i programnamnet, inte PEQ - allt OFF
     assert all(not f["on"] for f in syx_tools.decode_peq(raw0)), syx_tools.decode_peq(raw0)
     mx = syx_tools.decode_geq((here / "dumps" / "dsp8000_sysex_p16db.syx").read_bytes())
     assert mx["L"] == [16.0] * 31 and mx["R"] == [16.0] * 31, mx
@@ -322,9 +324,9 @@ def test_peq_record_layout_against_hardware():
     """dumps/dsp8000_sysex_peq_device.syx är enhetens EGEN kodning, avläst mot
     displayen 2026-09-03: L1 sattes för hand till exakt 1 kHz, resten flyttade
     feedback destroyern själv (16 kHz + finsteg, och 20 kHz överst).
-    Låser både fältindelningen (13 frekvens + 8 bandbredd + 10 gain - med den
-    gamla 10-bitars bandbredden blev fyra av sex poster 13,4 oktav) och
-    frekvenskodningen (ISO-bandindex + 1/64 oktav, inte ett logaritmiskt tal)."""
+    Låser fältindelningen (fyra byte: bandindex, finsteg, bandbredd, gain i
+    0,5 dB - ur EQ-Design) och frekvenskodningen (linjär interpolation i
+    tjugondelar mellan ISO-frekvenserna, exakt vad displayen visar)."""
     fs = syx_tools.decode_peq((Path(__file__).parent / "dumps"
                                / "dsp8000_sysex_peq_device.syx").read_bytes())
     assert [round(f["bw_oct"] * 60) for f in fs] == [37, 37, 34, 34, 28, 28], \
@@ -336,10 +338,12 @@ def test_peq_record_layout_against_hardware():
     assert all(20 <= f["freq_hz"] <= 20000 for f in fs), [f["freq_hz"] for f in fs]
     # och inversen träffar samma råvärden
     assert syx_tools.peq_freq_raw(1000) == 0x1100 and syx_tools.peq_freq_raw(20000) == 0x1E00
-    # displayavläsningar utan committad dump: 0x0527 visades som 96,15 Hz, och det
-    # vi skrev som 0x043C skrev enheten om till 0x0527 - samma frekvens, två kodningar
-    assert abs(syx_tools.peq_freq_hz(0x0527) - 96.15) < 0.1, syx_tools.peq_freq_hz(0x0527)
-    assert abs(syx_tools.peq_freq_hz(0x043C) / syx_tools.peq_freq_hz(0x0527) - 1) < 0.005
+    # displayavläsningar: 0x0527 visades som exakt 96,150 Hz (63 + 17*39/20), och
+    # destroyerns 0x1D05/0x1D0A/0x1D0F som 17/18/19 kHz - linjärt, inte 1/64 oktav
+    assert abs(syx_tools.peq_freq_hz(0x0527) - 96.15) < 1e-9, syx_tools.peq_freq_hz(0x0527)
+    assert [syx_tools.peq_freq_hz(0x1D00 | s) for s in (5, 10, 15)] == [17000, 18000, 19000]
+    assert syx_tools.peq_freq_hz(0x043C) == 89.0            # 50 + 13*60/20: finsteg > 19 extrapolerar
+    assert syx_tools.peq_freq_raw(96.15) == 0x0610          # samma frekvens, normaliserad kodning (80 + 16/20*20)
     assert syx_tools.peq_freq_raw(30000) == 0x1E00, "över 20 kHz klipps till toppbandet"
 
 
@@ -369,17 +373,16 @@ def test_decode_peq_roundtrips_a_record():
     payload[5:8] = b"\x4f\x0a\x40"
     bits = []
     fr = syx_tools.peq_freq_raw(1000)                # 0x1100 = ISO-band 17, finsteg 0
-    bw = 60 - 1                                        # 1,000 okt -> raw 59 (8 bitar)
-    g = -6 * 8                                         # -48, 10-bitars fält (dB = raw/8)
-    for val, w in ((fr, syx_tools.PEQ_FREQ_BITS), (bw, syx_tools.PEQ_BW_BITS),
-                   (g & 0x3FF, syx_tools.PEQ_GAIN_BITS)):
-        for i in range(w):
-            bits.append((val >> (w - 1 - i)) & 1)
-    for i, bit in enumerate(bits):                     # posten börjar på bit 87
+    bw = 60 - 1                                        # 1,000 okt -> raw 59
+    g = -6 * 2                                         # -12: gain lagras som dB*2 i en tecknad byte
+    for val in (fr >> 8, fr & 0xFF, bw, g & 0xFF):     # fyra byte per post
+        for i in range(8):
+            bits.append((val >> (7 - i)) & 1)
+    for i, bit in enumerate(bits):                     # posten börjar på bit 84
         pos = syx_tools.PEQ_BIT_OFFSET + i
         payload[10 + pos // 7] |= bit << (6 - pos % 7)
     fs = syx_tools.decode_peq(b"\xf0" + bytes(payload) + b"\xf7")
-    assert fs[0]["on"] and abs(fs[0]["freq_hz"] - 1000) < 15, fs[0]
+    assert fs[0]["on"] and fs[0]["freq_hz"] == 1000, fs[0]
     assert abs(fs[0]["bw_oct"] - 1.0) < 0.02 and fs[0]["gain_db"] == -6.0, fs[0]
     assert all(not f["on"] for f in fs[1:]), fs
 
@@ -398,18 +401,32 @@ def test_patch_dump_never_touches_master():
         assert g["R_master"] == before["R_master"], (kw, g["R_master"])
 
 
-def test_patch_dump_leaves_the_bit_after_the_peq_gain_alone():
-    """Postens 32:a bit (bit 278 för R3) ligger utanför gain-fältet och tillhör
-    nästa, okartlagda block - den är satt i 0db-dumpen även med PEQ orörd.
-    patch_dump ska skriva gainen men lämna den biten."""
+def test_patch_dump_leaves_the_program_name_alone():
+    """Direkt efter R3:s gain-byte börjar programnamnet. Den gamla 10-bitars
+    gainen skrev två bitar in i namnets första tecken ('AUT O Q' blev 'aUT O Q'
+    på enheten). Nu ska namnet stå orört, även om gainen inte är en halv dB."""
     base = (Path(__file__).parent / "dumps" / "dsp8000_sysex_0db.syx").read_bytes()
-    before = syx_tools._msb_bits(base[11:-1])
-    assert before[278] == 1, "referensdumpen ska ha biten satt - annars testar detta inget"
+    assert syx_tools.program_name(syx_tools.unpack_image(base), 0) == "AUT O Q     "
     out = syx_tools.patch_dump(base, peqs=[None] * 5 + [{"freq_hz": 100, "bw_oct": 1.0,
-                                                         "gain_db": -6.0}])
-    after = syx_tools._msb_bits(out[11:-1])
-    assert after[278] == 1, "skrivningen klottrade i nästa block"
-    assert syx_tools.decode_peq(out)[5]["gain_db"] == -6.0
+                                                         "gain_db": -6.125}])
+    assert syx_tools.program_name(syx_tools.unpack_image(out), 0) == "AUT O Q     "
+    assert syx_tools.decode_peq(out)[5]["gain_db"] == -6.0     # enhetens steg är 0,5 dB
+
+
+def test_unpack_image_program_names_and_current_program():
+    """Minnesbilden enligt EQ-Design (docs/midi.md 6.8) mot en riktig dump:
+    programnummer 9 = display 10 (samma som 33-ramens byte), arbetsbufferten
+    heter 'AUT O Q', fabriksprogrammen 1-2 'BAS  ROCK' och 'MOVIE', 100 tomt."""
+    img = syx_tools.unpack_image((Path(__file__).parent / "dumps" / "dsp8000_sysex_0db.syx").read_bytes())
+    assert len(img) == syx_tools.IMAGE_LEN
+    assert syx_tools.current_program(img) == 9 and img[8] == img[9]
+    assert syx_tools.program_name(img, 0) == "AUT O Q     "
+    assert syx_tools.program_name(img, 1).strip() == "BAS  ROCK"
+    assert syx_tools.program_name(img, 2).strip() == "MOVIE"
+    assert syx_tools.program_name(img, 100) == " " * 12
+    assert img[3] == 10 and img[4] == 9, "crossfade 10 s, shelving 9*3 dB/okt på testenheten"
+    # GEQ L börjar på minnesbyte 50 = bit 372 i den gamla räkningen
+    assert (syx_tools.GEQ_BIT_OFFSET + 28) // 8 == 50 and (syx_tools.PEQ_BIT_OFFSET + 28) // 8 == 14
 
 
 def test_decode_geq_roundtrips_a_single_band():

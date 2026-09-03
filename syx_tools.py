@@ -11,41 +11,50 @@ patch_dump() gör inversen av decode_*: skriver in GEQ-band och PEQ-poster i
 en befintlig dump (allt annat - header, master, okartlagda block - bevaras),
 så en patchad dump kan pushas tillbaka till enheten. Se rew_to_dsp8000.py apply.
 
-SND MEMORY DUMP / SysEx-svar (`F0 00 20 32 00 01 4F 0A|12 …  F7`):
-  * 10-byte header, sedan 12100 databyte, alla < 128 (7-bit-safe) men BIT-PACKAT.
-    Databyten packas MSB-först till en bitström; fälten läses ur den. Verifierat
-    mot enheten 2026-09-02 (`probe`, `probe --manual`). Samma för 4F 0A / 4F 12.
-  * GEQ: från bit GEQ_BIT_OFFSET (372), 64 tecknade 8-bitarsvärden — 31 vä band
-    (20 Hz–20 kHz), vä master, 31 hö band, hö master. **0,5 dB per enhet**
-    (dB = värde / 2, ±16 dB = ±32) — enhetens egna steg, inte CC:ts 0,25 dB.
-  * PEQ: 6 poster à 32 bitar från bit PEQ_BIT_OFFSET, ordning L1 R1 L2 R2 L3 R3.
-    Per post: frekvens (13 bit = 5 bit ISO-bandindex + 8 bit finsteg om
-    1/64 oktav, se peq_freq_hz),
-    bandbredd (8 bit, (raw+1)/60 oktav), gain (10-bit tvåkomplement, dB = raw/8).
-    Postens sista bit tillhör nästa (okartlagda) block - skriv den inte.
-    FB-D-läget per filter (ON/OFF/SGL på enheten) lagras INTE i dumpen
+Minnesdumpen (`F0 00 20 32 00 01 4F <12104 databyte> F7` = 12112 byte):
+  * Efter kommandobyten 4F följer 12104 databyte, 7-bitars-packade MSB-först:
+    8 databyte = 7 minnesbyte (avkodat ur Behringers EQ-Design, docs/midi.md 6.8
+    - den packar och packar upp exakt så). Uppackat: en minnesbild på 10591 byte:
+      byte 0-9     huvud: [0] statusflaggor, [3] crossfade (s), [4] shelving-lutning
+                   (steg om 3 dB/okt), [5] limiter (0 = av, annars 255-tröskel),
+                   [6] gate (0 = av, annars +1), [8] = [9] = aktuellt program (0-baserat)
+      byte 10-113  program 0 = arbetsbufferten (104 byte, nedan)
+      byte 114-189 76 byte som EQ-Design hoppar över (okänt innehåll)
+      byte 190-    program 1..100 à 104 byte
+    Program (104 byte): delay L, delay R (16 bit big-endian), 6 PEQ-poster à 4 byte
+    i ordning L1 R1 L2 R2 L3 R3, namn 12 tecken (ASCII - 0x20), GEQ L 32 byte
+    (31 band + master, tecknat, 0,5 dB/enhet), GEQ R 32 byte.
+    PEQ-post: [ISO-bandindex 0-30][finsteg][bandbredd: (raw+1)/60 okt][gain: dB*2, tecknat].
+    Frekvens = ISO[band] + (ISO[band+1] - ISO[band]) * finsteg/20 - linjär
+    interpolation, exakt vad enhetens display visar (0x0527 -> 96,150 Hz).
+    Verifierat mot enhetens dumpar (programnamn, programnummer, displayvärden).
+  * Fälten läses här ur bitströmmen räknat från fil-offset 11 (GEQ_BIT_OFFSET,
+    PEQ_BIT_OFFSET): samma bitar, bara 28 bitar (4 packade byte) in i bilden.
+    unpack_image() ger hela bilden byteinriktad.
+  * FB-D-läget per filter (ON/OFF/SGL på enheten) lagras INTE i dumpen
     (verifierat 2026-09-03 åt båda hållen: noll byte skiljer). Med ON flyttar
     feedback destroyern filtret själv - sätt OFF före en skrivning.
   * Master (index 31 och 63) har samma skala som banden, verifierat 2026-09-03
     (−0,5 dB -> −1, +1 dB -> +2). decode_geq returnerar den rått.
-  * Resten (delay, gate, limiter, 100 program) är inte kartlagt.
 """
 import argparse
 from pathlib import Path
 
 import dsp8000
 
-DUMP_HEADER_LEN = 10          # 00 20 32 00 01 4F xx yy 20 00
-GEQ_BIT_OFFSET = 372          # bit-offset till första bandet i den MSB-packade strömmen
+DUMP_HEADER_LEN = 10          # 00 20 32 00 01 4F + 4 packade databyte; bitströmmen nedan börjar på fil-offset 11
+GEQ_BIT_OFFSET = 372          # = minnesbyte 50 (huvud 10 + 40 in i program 0), 0,5 dB/enhet
 GEQ_DB_PER_UNIT = 0.5         # dumpens steg (INTE CC:ts 0,25 dB) - verifierat 2026-09-03
 GEQ_COUNT = 64               # 31 vä band + vä master + 31 hö band + hö master
-PEQ_BIT_OFFSET = 87          # bit-offset till första PEQ-posten (L1)
-PEQ_REC_BITS = 32            # bitar per PEQ-post: 13 frekvens + 8 bandbredd + 10 gain + 1 oanvänd
-PEQ_FREQ_BITS = 13           # 5 bit ISO-bandindex + 8 bit finsteg (se peq_freq_hz)
-PEQ_BW_BITS = 8              # 0-120 (1/60 oktav per steg) ryms i 8 bitar
-PEQ_GAIN_BITS = 10           # den 32:a biten i posten tillhör NÄSTA block - rör den inte
-PEQ_FINE_PER_OCT = 64        # finstegets upplösning: 1/64 oktav över bandets ISO-frekvens
+PEQ_BIT_OFFSET = 84          # = minnesbyte 14 (program 0 byte 4). Var 87 (3 bitar fel) till 2026-09-03
+PEQ_REC_BITS = 32            # 4 byte per post: bandindex, finsteg, bandbredd, gain
+PEQ_FINE_PER_BAND = 20       # finsteg per tersband: linjär interpolation mellan ISO-frekvenserna
 PEQ_LABELS = ["L1", "R1", "L2", "R2", "L3", "R3"]
+IMAGE_LEN = 10591            # uppackad minnesbild
+PROG_LEN = 104               # byte per program i bilden
+PROG_OFFSET = {0: 10}        # program 0 (arbetsbufferten) på byte 10, program n på 190 + 104*(n-1)
+for _n in range(1, 101):
+    PROG_OFFSET[_n] = 190 + PROG_LEN * (_n - 1)
 
 
 def load(path):
@@ -81,29 +90,32 @@ def decode_geq(b):
 
 
 def peq_freq_hz(raw):
-    """PEQ-frekvensfältets 13 bitar -> Hz.
+    """PEQ-frekvensens två byte (bandindex << 8 | finsteg) -> Hz.
 
-    Fältet är INTE ett logaritmiskt tal utan två delar: höga 5 bitar = index i
-    de 31 ISO-tersbanden (0 = 20 Hz, 17 = 1 kHz, 30 = 20 kHz), låga 8 bitar =
-    finsteg om 1/64 oktav uppåt från bandet. Verifierat 2026-09-03 mot enheten:
-    ett handsatt 1 kHz-filter gav 0x1100 (band 17, fin 0), enhetens egna
-    destroyer-filter 0x1D00/0x1D05/0x1D0A/0x1D0F (16 kHz + 5, 10, 15 finsteg)
-    och 0x1E00 = 20 kHz, och 0x0527 (band 5 = 63 Hz, fin 39) visades som
-    96,150 Hz mot modellens 96,11."""
-    band = min(raw >> 8, len(dsp8000.ISO_BANDS) - 1)
-    return dsp8000.ISO_BANDS[band] * 2 ** ((raw & 0xFF) / PEQ_FINE_PER_OCT)
+    Höga byten = index i de 31 ISO-tersbanden (0 = 20 Hz, 17 = 1 kHz, 30 = 20 kHz),
+    låga byten = finsteg i tjugondelar av avståndet till NÄSTA ISO-frekvens,
+    linjärt (EQ-Design 0x401430; enheten räknar likadant: 0x0527 = 63 + 17*39/20
+    = 96,150 Hz på displayen, 0x1D05/0x1D0A/0x1D0F = 17/18/19 kHz exakt).
+    Finsteget får överstiga 19 - enheten skrev själv 39."""
+    iso = dsp8000.ISO_BANDS
+    band, fine = min(raw >> 8, len(iso) - 1), raw & 0xFF
+    if band >= len(iso) - 1:
+        return float(iso[-1])
+    return iso[band] + (iso[band + 1] - iso[band]) * fine / PEQ_FINE_PER_BAND
 
 
 def peq_freq_raw(freq_hz):
-    """Hz -> frekvensfältets 13 bitar. Inversen av peq_freq_hz: närmaste
-    ISO-band under frekvensen + finsteg om 1/64 oktav (blir högst 23, eftersom
-    ISO-banden inte är exakta tersband). Kodningen är inte entydig - enheten
-    själv skrev 0x0527 (63 Hz + 39 steg) för 96 Hz - men alla varianter läses
-    lika av peq_freq_hz. Klipps till enhetens spann 20 Hz-20 kHz."""
-    import math
-    f = min(max(freq_hz, dsp8000.ISO_BANDS[0]), dsp8000.ISO_BANDS[-1])
-    band = max(i for i, b in enumerate(dsp8000.ISO_BANDS) if b <= f)
-    fine = min(255, max(0, round(PEQ_FINE_PER_OCT * math.log2(f / dsp8000.ISO_BANDS[band]))))
+    """Hz -> (bandindex << 8 | finsteg). Inversen av peq_freq_hz, normaliserad
+    så finsteget blir 0-19 (samma kodning som EQ-Design skriver). Klipps till
+    enhetens spann 20 Hz-20 kHz."""
+    iso = dsp8000.ISO_BANDS
+    f = min(max(freq_hz, iso[0]), iso[-1])
+    band = max(i for i, b in enumerate(iso) if b <= f)
+    if band >= len(iso) - 1:
+        return band << 8
+    fine = round((f - iso[band]) / (iso[band + 1] - iso[band]) * PEQ_FINE_PER_BAND)
+    if fine >= PEQ_FINE_PER_BAND:
+        band, fine = band + 1, 0
     return (band << 8) | fine
 
 
@@ -121,17 +133,33 @@ def decode_peq(b):
     out = []
     for k in range(6):
         base = PEQ_BIT_OFFSET + PEQ_REC_BITS * k
-        fr = _read_uint(bits, base, PEQ_FREQ_BITS)
-        bw = _read_uint(bits, base + PEQ_FREQ_BITS, PEQ_BW_BITS)
-        g = _read_uint(bits, base + 21, PEQ_GAIN_BITS)
-        g = g - 1024 if g >= 512 else g
+        hi, lo, bw, g = (_read_uint(bits, base + 8 * i, 8) for i in range(4))
+        g = g - 256 if g >= 128 else g
         out.append({
-            "freq_hz": peq_freq_hz(fr),
+            "freq_hz": peq_freq_hz(hi << 8 | lo),
             "bw_oct": (bw + 1) / 60,
-            "gain_db": g / 8,
-            "on": bool(fr or bw or g),
+            "gain_db": g / 2,
+            "on": bool(hi or lo or bw or g),
         })
     return out
+
+
+def unpack_image(b):
+    """Komplett minnesdump (F0…F7) -> minnesbilden på IMAGE_LEN byte, byteinriktad.
+    Samma uppackning som EQ-Design (0x4041d0): 8 packade 7-bitarsbyte -> 7 byte."""
+    bits = _msb_bits(b[7:-1])
+    return bytes(_read_uint(bits, i, 8) for i in range(0, len(bits) - 7, 8))
+
+
+def program_name(image, n):
+    """Programnamnet (12 tecken, lagrade som ASCII - 0x20) för program n (0 = arbetsbufferten)."""
+    o = PROG_OFFSET[n] + 28
+    return "".join(chr(c + 0x20) for c in image[o:o + 12])
+
+
+def current_program(image):
+    """Aktuellt program, 0-baserat (displayen visar +1). Ligger dubbelt i huvudet."""
+    return image[8]
 
 
 def bit_diff(a, b, gap=8):
@@ -168,6 +196,17 @@ def bit_label(start):
     k = (start - PEQ_BIT_OFFSET) // PEQ_REC_BITS
     if 0 <= k < len(PEQ_LABELS):
         return f"PEQ {PEQ_LABELS[k]}"
+    tb = (start + 28) // 8            # minnesbyte (bitströmmen börjar 4 packade byte in)
+    if tb < 10:
+        return "huvud"
+    if tb < 14:
+        return "delay"
+    if 38 <= tb < 50:
+        return "namn"
+    if 114 <= tb < 190:
+        return "gap (okänt)"
+    if tb >= 190:
+        return f"program {(tb - 190) // PROG_LEN + 1}"
     return "okänt"
 
 
@@ -198,12 +237,12 @@ def geq_value(db):
 
 
 def peq_raw(freq_hz, bw_oct, gain_db):
-    """(frekvens, bandbredd okt, gain dB) -> (fr, bw, g) råvärden för dumpen,
-    klippta till fältbredderna. Inversen av avkodningen i decode_peq."""
-    import math
+    """(frekvens, bandbredd okt, gain dB) -> (fr, bw, g) råvärden för dumpen:
+    fr = bandindex << 8 | finsteg, bw 0-119, g = dB*2 tecknat (enhetens spann
+    -48..+16 dB). Inversen av avkodningen i decode_peq."""
     fr = peq_freq_raw(freq_hz)
-    bw = max(0, min(255, round(bw_oct * 60) - 1))
-    g = max(-512, min(511, round(gain_db * 8))) & 0x3FF
+    bw = max(0, min(119, round(bw_oct * 60) - 1))
+    g = max(-96, min(32, round(gain_db * 2))) & 0xFF
     return fr, bw, g
 
 
@@ -236,9 +275,8 @@ def patch_dump(base, geq_L=None, geq_R=None, peqs=None):
             base_bit = PEQ_BIT_OFFSET + PEQ_REC_BITS * k
             fr, bw, g = ((0, 0, 0) if rec is None
                          else peq_raw(rec["freq_hz"], rec["bw_oct"], rec["gain_db"]))
-            _set_bits(data, base_bit, PEQ_FREQ_BITS, fr)
-            _set_bits(data, base_bit + PEQ_FREQ_BITS, PEQ_BW_BITS, bw)
-            _set_bits(data, base_bit + 21, PEQ_GAIN_BITS, g)   # rör inte postens 32:a bit
+            for i, v in enumerate((fr >> 8, fr & 0xFF, bw, g)):
+                _set_bits(data, base_bit + 8 * i, 8, v)
     return base[:1 + DUMP_HEADER_LEN] + bytes(data) + base[-1:]
 
 
@@ -275,10 +313,16 @@ def cmd_eq(args):
     if not is_memory_dump(b):
         raise SystemExit("Inte en minnesdump (F0 00 20 32 00 01 4F …). "
                          "Fader-frames (33 09) läses av rew_to_dsp8000.py monitor.")
-    print(f"{args.file}: {len(b)} byte, sub-kod {b[6]:02x} {b[7]:02x}")
+    img = unpack_image(b)
+    print(f"{args.file}: {len(b)} byte, statusbyte {img[0]:08b}, program {current_program(img) + 1} "
+          f"({program_name(img, 0).strip() or '-'}), crossfade {img[3]} s, shelving {img[4] * 3} dB/okt, "
+          f"limiter {'av' if img[5] == 0 else img[5]}, gate {'av' if img[6] == 0 else img[6]}")
     print(f"31 ISO-band: {', '.join(f'{f:g}' for f in dsp8000.ISO_BANDS)} Hz")
     _print_geq(decode_geq(b))
     _print_peq(decode_peq(b))
+    names = [(n, program_name(img, n).strip()) for n in range(1, 101)]
+    used = [f"{n}:{nm}" for n, nm in names if nm]
+    print(f"program med namn ({len(used)}): " + (", ".join(used) if used else "-"))
 
 
 def cmd_diff(args):

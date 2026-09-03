@@ -112,16 +112,43 @@ def monitor(seconds=30):
 
 
 def geq_status_lines(data):
-    """Tolka den läsbara GEQ-statusframen (fader-rörelse):
-    00 20 32 00 01 33 09 + 32 byte L + 32 byte R, pos 0-30 = band, 31 = master.
-    -> rader med dB per kanal, tom lista för andra meddelanden."""
-    if len(data) != 7 + 64 or list(data[:7]) != [0, 0x20, 0x32, 0, 1, 0x33, 9]:
+    """Tolka GEQ-statusframen (fader-rörelse):
+    00 20 32 00 01 33 <program> + 32 byte L + 32 byte R, pos 0-30 = band, 31 = master.
+    Skalan är enhetens egen, 0-64 med 32 = 0 dB i 0,5 dB-steg (samma som
+    EQ-Design:s kommando 21, inte CC-skalan); byten efter 33 är aktuellt
+    program, 0-baserat. -> rader, tom lista för andra meddelanden."""
+    if len(data) != 7 + 64 or list(data[:6]) != [0, 0x20, 0x32, 0, 1, 0x33]:
         return []
-    lines = []
+    lines = [f"program {data[6] + 1}"]
     for name, chunk in (("L", data[7:39]), ("R", data[39:71])):
-        bands = " ".join(f"{dsp8000.cc_to_db(v):+.1f}" for v in chunk[:31])
-        lines.append(f"GEQ {name}: {bands}  master={chunk[31]}")
+        bands = " ".join(f"{(v - 32) / 2:+.1f}" for v in chunk[:31])
+        lines.append(f"GEQ {name}: {bands}  master={(chunk[31] - 32) / 2:+.1f}")
     return lines
+
+
+def raw_sysex(hexbytes, wait_s=6.0):
+    """Skicka F0 00 20 32 00 01 <hexbytes> F7 och visa/spara svaren. Till
+    hårdvarutest av EQ-Design:s kommandon (docs/midi.md 6.8): raw 43 (vem är
+    där? svar 44), raw 40 (begär dump), raw 41 / 42 (EQ- / RTA-läge),
+    raw 15 00 (RTA-ram 11 tillbaka), raw 21 00 <32 L> <32 R> (GEQ, 32 = 0 dB)."""
+    payload = [int(x, 16) for x in hexbytes]
+    with open_output() as out, open_input() as inp:
+        list(inp.iter_pending())
+        print("skickar F0 00 20 32 00 01 " + " ".join(f"{x:02X}" for x in payload) + " F7")
+        _send_sysex(out, 0x00, 0x01, payload)
+        msgs = _collect(inp, wait_s=wait_s)
+    for m in msgs:
+        if m.type != "sysex":
+            print(f"  {m}")
+            continue
+        d = bytes(m.data)
+        f = paths.new(paths.CAPTURES, f"raw-{payload[0]:02x}-{len(d)}b-{time.strftime('%H%M%S')}.syx")
+        f.write_bytes(b"\xf0" + d + b"\xf7")
+        print(f"  svar {len(d)} byte: {d[:24].hex(' ')}{'…' if len(d) > 24 else ''}  -> {f}")
+        for line in geq_status_lines(d):
+            print("   ", line)
+    if not msgs:
+        print(f"  inget svar inom {wait_s:g} s")
 
 
 BEHRINGER_ID = [0x00, 0x20, 0x32]
@@ -717,6 +744,9 @@ def main():
     sub.add_parser("sysex").add_argument("--write-test", action="store_true")
     sub.add_parser("readback")
     sub.add_parser("grab").add_argument("path", help="filnamn att spara dumpen som")
+    rw = sub.add_parser("raw", help="skicka F0 00 20 32 00 01 <hex…> F7, visa svaren")
+    rw.add_argument("bytes", nargs="+", metavar="HEX")
+    rw.add_argument("--wait", type=float, default=6.0)
     pp = sub.add_parser("push")
     pp.add_argument("path", help="minnesdump (.syx) att skicka till enheten")
     pp.add_argument("--send-only", action="store_true",
@@ -775,6 +805,8 @@ def main():
         readback()
     elif args.cmd == "grab":
         grab(args.path)
+    elif args.cmd == "raw":
+        raw_sysex(args.bytes, args.wait)
     elif args.cmd == "push":
         push(args.path, args.send_only)
     elif args.cmd == "probe":

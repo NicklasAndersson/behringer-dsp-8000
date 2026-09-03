@@ -115,6 +115,7 @@ varsin hopfällbar sektion.
 | `roundtrip [--keep]` | hårdvarutest av dump-vägen: backup → skriv känt GEQ+PEQ-mönster → läs tillbaka + jämför → återställ |
 | `readback` | hämtar dumpen och skriver ut 31+31 GEQ-band + 6 PEQ-filter |
 | `grab FIL.syx` | hämta en dump och spara den |
+| `raw HEX…` | skicka `F0 00 20 32 00 01 <hex…> F7` och visa/spara svaren – hårdvarutest av EQ-Design:s kommandon ([midi.md 6.8](midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)) |
 | `probe [--band Hz --value CC]` / `probe --manual` | kartlägg dumpen: dumpa, ändra en sak, dumpa, diffa |
 | `push [--send-only] FIL.syx` | skicka en dump till enheten (RCV-testet) |
 | `calibrate` | verifiera `CC = 64 + dB×4` mot displayen |
@@ -136,11 +137,13 @@ Dump-vägen **kräver ett tryck på RCV MEMORY DUMP** precis före sändning –
 
 Ren stdlib, ingen MIDI, ingen enhet:
 
-- `eq FIL.syx` – avkoda GEQ + PEQ ur en sparad dump
+- `eq FIL.syx` – avkoda huvud (program, crossfade, shelving, limiter, gate),
+  GEQ + PEQ och programnamnen ur en sparad dump
 - `diff A.syx B.syx` – råa byte som skiljer, plus GEQ/PEQ som ändrats
 - `hex FIL.syx [--start N --length N]` – hexdump
 - som modul: `patch_dump(base, geq_L, geq_R, peqs)` skriver GEQ/PEQ i en dump
-  (inversen av avkodningen), 7-bit-safe
+  (inversen av avkodningen), 7-bit-safe; `unpack_image(dump)` ger hela
+  minnesbilden byteinriktad (10591 byte), `program_name(img, n)` namnet
 
 Det här är verktyget för att kartlägga resten av dumpen: `probe --manual`,
 ändra en sak på enheten, `diff`.

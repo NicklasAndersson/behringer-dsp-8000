@@ -26,7 +26,8 @@ USB som MIDI-interface. Det som *inte* är testat står uttryckligen markerat.
 | Fader-rörelse → läsbar GEQ-status (`33 09`) | DSP → dator | **fungerar** |
 | Läsa GEQ + PEQ ur dumpen | – | **avkodat** (`syx_tools.py eq`, `rew_to_dsp8000.py readback`) |
 | RCV MEMORY DUMP (ladda en dump tillbaka) | dator → DSP | **fungerar med knapptryck** – tryck + på RCV MEMORY DUMP precis före sändning; utan det landar inget (2026-09-03). `push` / `apply` / `roundtrip`, avsnitt 4 |
-| Skriva GEQ + PEQ via dump | dator → DSP | **verifierat 2026-09-03** – återläsningen är byte-identisk med det vi skickade. GEQ-blocket låg felkartlagt fram till dess (6.4); master och FB-D-läget skrivs inte alls. PEQ-frekvensen kodades fel fram till 11:22 samma dag – en `apply` med rättad kodning återstår (avsnitt 7). Delay/gate/limiter: samma väg, bitfälten inte kartlagda |
+| Skriva GEQ + PEQ via dump | dator → DSP | GEQ **verifierat 2026-09-03**. PEQ: SysEx-återläsningen är byte-identisk med det som skrevs, men **PEQ-sidans display visar fel frekvens för post 2–6** (rätt bara för post 0) – ny, oförklarad bugg, avsnitt 7 (12:52). Master och FB-D-läget skrivs inte alls. Delay/gate/limiter: samma väg, bitfälten inte kartlagda |
+| EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03 (6.8); bilden verifierad mot våra dumpar (programnamn, programnummer), kommandona `21`/`22`/`43`… otestade mot enheten |
 | ADRStudio:s granulära DSP8024-SysEx | – | **dött** på DSP8000 (bilaga A) |
 
 Returvägen kräver **båda** MIDI-kablarna (interface OUT → DSP IN *och*
@@ -222,6 +223,12 @@ utnivån (skalan är känd, 6.4).
 **Före en `apply`: FB-D OFF på alla sex filtren.** Läget ligger inte i dumpen,
 och med ON flyttar destroyern filtren själv (testloggen 2026-09-03).
 
+**Obs (12:52-testet, avsnitt 7):** även med FB-D OFF och en bit-exakt
+SysEx-återläsning visade PEQ-sidans display fel frekvens för post 2–6.
+Bandbredd och gain stämde. Oklart om det är ett displayfel (löses av att
+bläddra på PEQ-sidan) eller ett verkligt gap i frekvenskodningen för post
+≥ 1 – se avsnitt 7 för detaljerna och nästa test.
+
 **Skilj på de två skrivvägarna:** `send` (CC, ett band i taget) och dump-pushen
 (`apply` / `push` / `roundtrip`) är olika mekanismer. CC är inkrementellt men
 bara GEQ och kan tappa meddelanden; dumpen är atomisk och skriver GEQ + PEQ men
@@ -242,9 +249,9 @@ F0 00 20 32 <dev> <model> <cmd …> F7
 (broadcast). `model` = **`01` = DSP8000**. `0E` (DSP8024, som ADRStudio
 använder) ignoreras helt av vår enhet.
 
-`dev`: vi har bara använt `00`, med CHANNEL 1 på enheten. Gemini-rapporten
-hävdar att device-ID följer MIDI-kanalen (CHANNEL 2 ⇒ `01`); otestat,
-readme:s checklista.
+`dev` = **MIDI-kanal − 1** enligt EQ-Design (6.8): den skickar utkanalen − 1
+och läser enhetens kanal ur `44`-svaret. Vi har bara kört `00` med CHANNEL 1;
+att enheten kräver rätt kanal är otestat (readme:s checklista).
 
 ### 6.2 Förfrågan → dump
 
@@ -253,8 +260,9 @@ F0 00 20 32 00 01 70 <xx> F7
 ```
 
 Oavsett `xx` (`01`, `10 1F`, `64` – allt testat) svarar enheten efter ~5 s
-med **hela minnesdumpen**. Det finns ingen granulär läsning och ingen
-versionssträng. Enheten måste stå på EQ-huvudskärmen. Förfrågan ändrar inget.
+med **hela minnesdumpen**. EQ-Design begär samma dump med `40` och har
+granulära kommandon (`20`–`23`, 6.8) som vi inte testat; någon versionssträng
+har vi inte sett. Enheten måste stå på EQ-huvudskärmen. Förfrågan ändrar inget.
 Det här är vad `grab_dump()` i `rew_to_dsp8000.py` skickar.
 
 Gemini-rapporten (och ADRStudio, för DSP8024) säger att SysEx tas emot på
@@ -267,42 +275,43 @@ otestat (readme:s checklista).
 ### 6.3 Minnesdumpen
 
 ```
-F0  00 20 32 00 01 4F <sub> <flag> 20 00  <12100 databyte>  F7      = 12112 byte
+F0  00 20 32 00 01 4F  <12104 databyte>  F7      = 12112 byte
 ```
 
-| Utlöst av | sub | flag |
-|---|---|---|
-| SND MEMORY DUMP-knappen | `12` | `00` |
-| `70`-förfrågan | `0A` | `40` |
+Efter `4F` följer direkt data – det finns **ingen header**. De fyra byte vi
+tidigare läste som `<sub> <flag> 20 00` är de första packade databytena
+(rättat 2026-09-03 med EQ-Design, 6.8). Uppackade blir de minnesbildens byte
+0–3, och byte 0 är ett **statusflaggfält** som varierar mellan avläsningar
+(`24`, `15`, `09` sedda) – det är därför "sub-koden" aldrig sa något om hur
+dumpen togs. Låt `is_memory_dump` titta på `4F`.
 
-**Sub-koden säger inte hur dumpen togs.** 2026-09-03 gav två `70`-förfrågningar
-(GUI:ts läsning, 43 s isär) `02 40` respektive `12 00` – samma par som
-knapp-dumpen. Sedan tidigare finns även `0A 40` och `04`. Byte 7 verkar vara
-ett flaggfält (bitarna `08`/`10` varierar, `02` alltid satt), inte en
-källmarkör. Låt `is_memory_dump` fortsätta titta på `4F`, inte på sub-koden.
-
-- Databyten är alla < 128 (7-bit-safe) men **bit-packade**: de packas upp
-  MSB-först, 7 bitar per byte, till en bitström som fälten läses ur.
-- **Offset-konvention:** *data-offset* = index i de 12100 databytena.
-  Fil-offset = data-offset + 11 (F0 + 10-byte header). `syx_tools.py diff`
-  skriver fil-offset, `probe`/`push` skriver data-offset.
-- ~95 % nollor på testenheten (nästan tom).
-- Knapp-dumpen och förfrågnings-dumpen skiljer sig på 84 byte, alla inom
-  fil-offset 7–218: header-bytena, GEQ-blocket (annan EQ vid capture) och
-  det 9-byte-mönster som beskrivs under 6.4. Från fil-offset 219 och framåt –
-  i praktiken de 100 sparade programmen – är de bit-identiska.
-- 12100 = 100 × 121 går jämnt ut, men mönstret vid data 39 återkommer vid 199
-  (delta 160, inte 121), så "100 program × 121 byte" är **inte** bekräftat.
+- Databyten är alla < 128 men **7-bitars-packade** MSB-först: 8 databyte =
+  7 minnesbyte. 12104 databyte ⇒ en minnesbild på **10591 byte**, layout i 6.8.
+- **Offset-konvention:** `syx_tools` läser fälten ur bitströmmen räknat från
+  fil-offset 11 (`GEQ_BIT_OFFSET`, `PEQ_BIT_OFFSET`); minnesbyte = (bit + 28) / 8.
+  `syx_tools.py diff` skriver fil-offset och märker ändrade bit-spann med
+  huvud / delay / PEQ / namn / GEQ / gap / program. `unpack_image` ger bilden
+  byteinriktad.
+- Knapp-dump och förfrågnings-dump skiljer sig bara i statusbyten och det som
+  ändrats på enheten däremellan; programmen 1–100 är identiska.
+- ~~"100 program × 121 byte"~~ – det är 10 + 104 + 76 + 100 × 104 (6.8).
 
 ### 6.4 Avkodad layout (verifierad med `probe` / `probe --manual`)
 
-| Block | Bit-offset | Data-offset | Format |
+| Block | Bit-offset (`syx_tools`) | Minnesbyte | Format |
 |---|---|---|---|
-| Okänt (arbetsbuffert) | 0–86 | 0–12 | `80 36 00 00 00 02 33 16 00 00 …` – lika i alla dumpar. Kandidat: limiter/gate/delay/flaggor |
-| **PEQ** | 87–278 | 12–39 | 6 poster à 32 bitar, ordning **L1 R1 L2 R2 L3 R3** (nedan) |
-| Okänt mönster | ~278–340 | 39–47 | `02 09 54 68 00 17 40 06 10` i `4F 12`-dumpar, noll i `4F 0A`. Återkommer vid data 199–207 |
-| **GEQ** | 372–883 | 53–126 | 64 tecknade 8-bitarsvärden: 31 vä band, vä master, 31 hö band, hö master |
-| Resten | 885– | 127– | ej kartlagt (delay, gate, limiter, 100 program …) |
+| Huvud | −28–51 | 0–9 | statusflaggor, crossfade, shelving, limiter, gate, program (6.8) |
+| Delay | 52–83 | 10–13 | delay L, delay R, 16 bit big-endian (program 0) |
+| **PEQ** | 84–275 | 14–37 | 6 poster à 4 byte, ordning **L1 R1 L2 R2 L3 R3** (nedan) |
+| Namn | 276–371 | 38–49 | arbetsbuffertens namn, 12 tecken (ASCII − 0x20) – det var "mönstret vid data 39" |
+| **GEQ** | 372–883 | 50–113 | 64 tecknade 8-bitarsvärden: 31 vä band, vä master, 31 hö band, hö master |
+| Gap | 884–1491 | 114–189 | 76 byte EQ-Design hoppar över; testenheten har `21 35 34 00 2f 00 31` vid 178–184, annars 0 |
+| Program 1–100 | 1492– | 190– | 104 byte var, samma layout som byte 10–113 (delay, PEQ, namn, GEQ) |
+
+Bit-offset är `syx_tools`:s räkning (bitströmmen från fil-offset 11);
+minnesbyte är EQ-Design:s byteinriktade bild från fil-offset 7 (6.8).
+Verifierat mot `dumps/`: programnamnen läses ut i klartext och huvudets
+programnummer 9 = displayens program 10.
 
 **GEQ-värde: 0,5 dB per enhet** – `dB = värde / 2`, ±32 ⇒ ±16,0 dB, alltså
 enhetens egna 0,5 dB-steg. **Inte** CC-skalan: CC har 0,25 dB/steg
@@ -322,48 +331,31 @@ som banden. `decode_geq` returnerar master rått – multiplicera med 0,5 för d
 > blinka rött efter en GUI-skrivning. Fixat; låst av
 > `test_geq_offset_and_scale_against_hardware` mot `dumps/dsp8000_sysex_edges.syx`.
 
-**PEQ-post (32 bitar):**
+**PEQ-post (4 byte, rättad 2026-09-03 med EQ-Design):**
 
-| Fält | Bitar | Tolkning |
+| Byte | Fält | Tolkning |
 |---|---|---|
-| frekvens | 13 | **5 bit ISO-bandindex + 8 bit finsteg**: `f = ISO_BANDS[raw >> 8] · 2^((raw & 255)/64)` |
-| bandbredd | 8 | `(raw + 1) / 60` oktav, 0–120 |
-| gain | 10 | tvåkomplement, `dB = raw / 8` |
-| (oanvänd) | 1 | postens sista bit – **tillhör nästa block, skriv den inte** |
+| 0 | bandindex | 0–30 i de 31 ISO-tersbanden (0 = 20 Hz, 17 = 1 kHz, 30 = 20 kHz) |
+| 1 | finsteg | tjugondelar av avståndet till nästa ISO-frekvens: `f = ISO[b] + (ISO[b+1] − ISO[b]) · fin/20` |
+| 2 | bandbredd | `(raw + 1) / 60` oktav, 0–119 |
+| 3 | gain | tecknad byte, `dB = raw / 2` (−48…+16 dB) |
 
-**Frekvensfältet är inte ett logaritmiskt tal** utan två delar: höga 5 bitar
-är index i de 31 ISO-tersbanden (0 = 20 Hz, 17 = 1 kHz, 29 = 16 kHz,
-30 = 20 kHz), låga 8 bitar är finsteg om **1/64 oktav** uppåt från bandet.
-Verifierat 2026-09-03: ett filter satt för hand till exakt 1 kHz gav `0x1100`
-(band 17, finsteg 0), enhetens egna destroyer-filter gav `0x1D00`, `0x1D05`,
-`0x1D0A`, `0x1D0F` (16 kHz plus 5, 10 och 15 finsteg = 16,9 / 17,8 / 18,8 kHz,
-avläst som "17/18/19 kHz") och `0x1E00` = 20 kHz. Kontrollpunkt: `0x0527`
-(band 5 = 63 Hz, finsteg 39) visades som 96,150 Hz, modellen ger 96,11.
+Vår tidigare post (13 + 8 + 10 + 1 bitar från bit 87) låg **tre bitar snett**:
+"5 bit bandindex" var bandindexets låga fem bitar, "10 bit gain" var
+gain-byten plus två bitar av nästa posts bandindex. Alla värden på halva dB
+avkodades ändå rätt, men gain på åttondels dB klottrade i nästa post – och
+för R3 i **programnamnets första tecken** (`AUT O Q` blev `aUT O Q` på
+enheten, `dsp8000_sysex_peq_device.syx`). Bandbredden var rätt hela tiden.
 
-Den gamla log-modellen (`20·10^(raw/640)` på de 11 höga bitarna) gav 65 Hz för
-`0x0527` och 15,9–16,1 kHz för alla tre destroyer-filtren – det är de
-avläsningarna som fäller den. `0x1100` för 1 kHz fanns redan i
-2026-09-02-capturen med sex handsatta filter (L1 = 1 kHz, 2 okt, −6 dB);
-log-modellen läste det som 1002 Hz och dolde mönstret.
-
-**Kodningen är inte entydig.** Finsteget får överstiga ett tersband: vi skrev
-`0x043C` (band 4 = 50 Hz + 60 steg = 95,8 Hz, avsett som 53 Hz under
-log-modellen) och enheten skrev om samma filter till `0x0527` (63 Hz + 39 steg
-= 96,1 Hz) – samma frekvens, annan uppdelning, och inte heller enhetens är
-kanonisk (80 Hz + 17 vore närmast). Att enhetens omskrivning är samma
-frekvens under modellen (95,8 → 96,1 Hz) men inte under log-modellen (53 →
-65 Hz) är i sig en oberoende bekräftelse. `peq_freq_raw`
-väljer alltid närmaste ISO-band *under* frekvensen (finsteg ≤ 23, eftersom
-ISO-banden inte är exakta tersband) och klipper till 20 Hz–20 kHz;
-`peq_freq_hz` läser alla 256 finsteg.
-
-Frekvens- och bandbreddsbredden är rättade 2026-09-03 (var 11 + 10). Enheten
-skrev själv om posterna medan feedback destroyern var på, och de värdena lästes
-av på displayen samtidigt: med 10-bitars bandbredd blev fyra av sex poster
-orimliga (13,4 oktav), med 8 bitar stämmer alla sex exakt mot displayens
-`37/60`, `34/60`, `28/60`. De två bitar som frigörs hör till frekvensfältet,
-och då landar enhetens eget toppfilter på råvärde 7680 = exakt 20 kHz.
-Gain-fältet ligger kvar på bit 21–30, oförändrat och verifierat två gånger.
+**Frekvensen är linjär mellan ISO-frekvenserna**, inte logaritmisk: EQ-Design
+(`0x401430`) räknar `f = ISO[b] + (ISO[b+1] − ISO[b]) · fin/20`, och enheten
+visar exakt det – `0x0527` = 63 + 17·39/20 = **96,150 Hz** (displayen visade
+96,150), destroyerns `0x1D05`/`0x1D0A`/`0x1D0F` = **17/18/19 kHz** jämnt,
+`0x1100` = 1 kHz, `0x1E00` = 20 kHz. Vår 1/64-oktav-modell gav 96,11 och
+16,9/17,8/18,8 kHz – nära, men fel. Finsteget får överstiga 19 (enheten
+skrev själv 39); `peq_freq_raw` normaliserar till 0–19 som EQ-Design gör.
+Att enheten skrev om vårt `0x043C` (89 Hz) till `0x0527` (96 Hz) var alltså
+**inte** samma frekvens – destroyern stod på ON och flyttade filtret.
 
 Posten helt noll = inga värden satta. Verifierat 2026-09-02: 6 filter satta
 till −6/+1/−2/+16/+12/+6 dB på enheten → exakt match i avkodningen.
@@ -380,25 +372,19 @@ skrivning**, annars flyttar destroyern filtren (avsnitt 7). Om ett filter med
 FB-D OFF bearbetar ljudet som stillastående parametriskt filter är inte
 verifierat – en REW-sweep avgör.
 
-**Gain-fältet är 10 bitar, inte 11** (rättat 2026-09-03). Båda bredderna ger
-samma dB för alla handsatta testvärden (10 bitar med `raw/8` ⇔ 11 bitar med
-`raw/16`), men i `dumps/dsp8000_sysex_0db.syx` och `_p16db.syx` – där PEQ-posterna
-är helt orörda – är bit 278 ändå satt. Under 11-bitarsmodellen vore det en
-gain på +1/16 dB i ett tomt filter; under 10-bitarsmodellen är det första biten
-i 9-byte-mönstret som börjar på data 39. `patch_dump` skriver därför bara 10
-bitar och lämnar postens sista bit i fred (`test_patch_dump_leaves_the_bit_after_the_peq_gain_alone`).
-Samma off-by-one-fälla som GEQ-blocket hade, men här höll offset 87: enhetens
-egen dump med ett handsatt **−2 dB**-filter avkodas rätt på 87 och som +126 dB
-på 86 – ett negativt värde vid en fältgräns är det som avgör.
-
 ### 6.5 Fader-statusframe (skickas vid fader-rörelse)
 
 ```
-F0 00 20 32 00 01 33 09 <32 byte vänster> <32 byte höger> F7
+F0 00 20 32 00 01 33 <program> <32 byte vänster> <32 byte höger> F7
 ```
 
-Position 0–30 = band (samma CC-skala, 64 = 0 dB), 31 = master. Direkt läsbar,
-men kräver att någon rör en fader – `monitor` skriver ut den i dB.
+Byten efter `33` är **aktuellt program**, 0-baserat (`09` = program 10, samma
+tal som minnesbildens huvud). Position 0–30 = band, 31 = master, på
+**enhetens egen skala 0–64 med 32 = 0 dB i 0,5 dB-steg** – samma som
+EQ-Design:s kommando `21`, **inte** CC-skalan (rättat 2026-09-03: master
+`15`/`16` i ramen = −8,5/−8 dB, exakt enhetens master i dumpen två dagar
+senare). EQ-Design 1.0 känner inte till `33`. `monitor` skriver ut den i dB.
+Kvar att verifiera på hårdvara: ett band på känt dB mot ramens råvärde.
 
 ### 6.6 Referensdumpar i `dumps/`
 
@@ -435,13 +421,98 @@ ovan: läs *bit*-spannen, och misstro ett fält som bara råkar ge rätt dB.
 Ett fält som gränsar till ett annat avslöjar sig när grannen är **negativ** –
 sätt därför alltid ett negativt provvärde, inte bara ett positivt.
 
-Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
-0–12 och mönstret vid data 39/199) och **programplatserna** (byt program på
-enheten, diffa). Har programmen namn (Gemini-rapporten säger "alfanumerisk
-namngivning", ADRStudio har `3C` = 12 tecken på DSP8024): döp ett program
-till något unikt, spara, `grab`, och sök mönstret – både rått och i den
-uppackade bitströmmen – så faller programblockets storlek och läge ut direkt.
-PEQ-läget är avgjort: det ligger inte i dumpen alls.
+Med minnesbilden kartlagd (6.8) återstår **huvudets statusbyte** (vilka
+bitar är IN/OUT, EQ/RTA, stereolink …: `probe --manual`, ändra en sak, se
+byte 0), **76-bytesgapet** vid byte 114–189 (RTA-inställningar?
+mic-korrektion?) och **delayens enhet** (16 bit rått; EQ-Design räknar med
+48 kHz, så troligen sampel – sätt 10 ms på enheten och diffa).
+
+### 6.8 EQ-Design-protokollet (ur `EQDESIGN.EXE`, 2026-09-03)
+
+Behringers egen editor EQ-Design 1.0 (bilaga B) är en MFC-app länkad
+1996-12-11 som pratar med DSP8000 via `midiOutLongMsg`. Disassemblerad
+2026-09-03 (llvm-objdump; nyckelfunktioner: sändare `0x40b2e0`, dump
+`0x403ed0`, 7→8-packning `0x403f70`/`0x4041d0`, mottagare `0x404280`,
+frekvens `0x401430`). Sändaren bygger varje SysEx som
+
+```
+F0 00 20 32 <kanal−1> 01 <kommando> <data…> F7
+```
+
+**Device-ID är MIDI-utkanalen, 0-baserad** (CHANNEL 1 ⇒ `00`), och enheten
+svarar med sin egen kanal i samma byte – "Search DSP8000" skickar `43` och
+läser kanalen ur `44`-svaret ("DSP8000 found at channel: %d"). Modellbyte
+`01`. Mottagaren kräver `00 20 32`, modell `01` och (utom för `44`) att
+device-ID = inkanalen.
+
+| Kmd | Riktning | Data | Betyder | Status hos oss |
+|---|---|---|---|---|
+| `43` | → DSP | – | "vem är där?" | otestat – `./run.sh raw 43` |
+| `44` | DSP → | – | svar på `43`, device-ID = enhetens kanal | otestat |
+| `40` | → DSP | – | begär minnesdumpen ("Read DSP8000 Data?") | otestat; vårt `70 xx` ger också dumpen |
+| `4F` | båda | 12104 packade byte | hela minnesbilden (nedan). → DSP: "Update DSP8000", efter rutan "Select MEMORY DUMP RECEIVE on DSP8000" | **verifierat** (`grab`/`push`, avsnitt 4) |
+| `21` | båda | `<prog>` + 32 L + 32 R | grafisk EQ opackad: `dB·2 + 32` (0–64, 32 = 0 dB), band 0–30 + master per kanal | otestat → DSP: GEQ-skrivning **utan knapptryck** |
+| `22` | båda | `00` + 32 packade (24 byte = 6 PEQ-poster + 4 fyll) | de sex parametriska filtren i arbetsbufferten | otestat → DSP: **granulär PEQ-skrivning** |
+| `20` | båda | `00` + 16 packade (14 byte = huvud 10 + delay L/R) | limiter, gate, crossfade, shelving, program, delay | otestat |
+| `23` | båda | `<prog>` + 120 packade (104 byte) | ett helt program 1–100 | otestat |
+| `15` | → DSP | 1 byte flaggor | RTA-styrning: bit 0–3 = fyra RTA-inställningar (auto gain, detektor, max display, 1/0,5 dB – ordningen okänd), bit 4 = engångspuls. Skickas efter varje `11` ⇒ RTA-strömmen | otestat |
+| `11` | DSP → | 1 byte + 80 packade (70 byte) | RTA-ram: 64 bandvärden + statusbyte (nivå/gain i 4 dB-steg) | otestat |
+| `41` / `42` | båda | – | läge EQ / RTA (menyn Mode; enheten skickar samma vid byte på fronten) | otestat |
+| `10` | DSP → | 16 packade | okänt – EQ-Design tar emot och ignorerar | – |
+| `33` | DSP → | program + 64 byte | fader-status (6.5) – **okänt för EQ-Design 1.0** | verifierat |
+| `70 xx` | → DSP | – | vår förfrågan – **finns inte i EQ-Design** men ger dumpen | verifierat |
+
+I läget "Ctl/Pgm Change" går GEQ i stället som CC `CtrlOffset + 0…63` med
+värde `(dB·2 + 32)·2` = `64 + 4·dB` (skalan vi mätte) och program som `C0`;
+enheten skickar CC/PC tillbaka som EQ-Design tolkar med samma formler.
+
+**7→8-packningen** (`0x403f70`): 7 minnesbyte i taget, MSB-först, till 8
+databyte < 128 – exakt den bitström vi redan läste. Ingen checksumma: i
+76-bytesgapet skickar EQ-Design oinitierat stackskräp och enheten tar emot.
+
+**Minnesbilden** (`0x403ed0`: 1513 grupper × 7 = 10591 byte, sista byten fyll):
+
+| Byte | Innehåll |
+|---|---|
+| 0 | statusflaggor: bit 1 och bit 6 modelleras av EQ-Design (betydelse okänd), resten sätter enheten (`24`/`15`/`09` sedda) |
+| 1–2 | 0 |
+| 3 | crossfade vid programbyte, sekunder 0–15 (testenheten: **10 s**) |
+| 4 | shelving-lutning i steg om 3 dB/okt, 1–10 (testenheten: 9 = 27 dB/okt) |
+| 5 | limiter: 0 = av, annars `255 − tröskel` (0–36 dB under full skala) |
+| 6 | noise gate: 0 = av, annars `tröskel + 1` (−44…−96 dB) |
+| 7 | okänt (0 på testenheten) |
+| 8, 9 | aktuellt program, 0-baserat, två gånger (`09` = program 10) |
+| 10–113 | **program 0 = arbetsbufferten**, 104 byte |
+| 114–189 | 76 byte EQ-Design varken skriver eller läser |
+| 190–10589 | program 1–100 à 104 byte |
+
+**Program, 104 byte:** delay L, delay R (16 bit big-endian; enhet obekräftad,
+EQ-Design räknar med 48 kHz), 6 PEQ-poster à 4 byte (L1 R1 L2 R2 L3 R3, 6.4),
+namn 12 tecken lagrade som ASCII − 0x20, GEQ L 32 byte, GEQ R 32 byte
+(tecknat, 0,5 dB/enhet, band 0–30 + master). Testenheten har åtta namngivna
+program (`BAS  ROCK`, `MOVIE`, `EXP!`, `QUVADIS 1`, `BAS`, `MOVIE  BAS`,
+`GOOD 1`, `AUT O Q`); `syx_tools.py eq` listar dem.
+
+**Övrigt ur programmet:** menyn File / Mode (Eq, RTA) / Setup (EQ, Parametric
+EQ, Delay, MIDI) / Curve (Display, Recalc L/R) / Help. Dialoger: Parametric
+Equalizer (Left 1–3, Right 1–3; +16…−48 dB, 20 Hz–20 kHz, 1/60–120/60 okt),
+RTA Setup (källa Microphone/left/right/mono, line gain 0–60 dB och mic gain
+20–80 dB i 4 dB-steg, detektor Peak/RMS, decay 15/65/250/1000 ms, Max Display,
+1/0,5 dB, Auto-Q Target Flat + värde, Mic Correction Off/Left/Right, Output
+Off/Input/Sine/White Noise/Pink Noise, sinusfrekvens, nivå), EQ Parameter
+(limiter 0…−36 dB, gate −44…−96 dB, crossfade 0–15 s, shelving 3–30 dB/okt,
+Limiter ON, Gate ON), Delay Parameter (L/R, temperatur 0–40 °C, ms/meter/feet,
+Delay ON), MIDI Setup (in/ut-enhet och kanal 1–16, Sys. Exclusive eller
+Ctl/Pgm Change, Controller Offset, Update DSP8000, Search DSP8000), Program
+Load/Save med namn, knappraderna PEAK HOLD / PEAK RESET / AUTOGAIN / FREEZE
+(RTA) och ZERO / INVERT / PGM. CLEAR / PGM. LOAD / PGM. SAVE (EQ). Rutorna
+"connect DSP8000 – Set MIDI ON – Set OMNIMODE ON – Set SYSTEMEXL RECEIVE ON"
+och "Select MEMORY DUMP RECEIVE on DSP8000" bekräftar våra egna fynd om
+inställningar och knapptryck. Utvecklare enligt strängarna: LAUTH
+DATENVERARBEITUNG; om-rutan säger "DIGITAL 24-bit DUAL DSP MAINFRAME".
+Inställningar i registret under `Software\BEHRINGER` (CtrlOffset, MIDIMode,
+MIDIIn/OutDevice, MIDIIn/OutChannel), filformat `.eqd`. Transferfunktionen
+räknas vid fs = 48 000 Hz.
 
 ---
 
@@ -584,6 +655,61 @@ PEQ-läget är avgjort: det ligger inte i dumpen alls.
   (`history/reads/read-<tid>.syx`); skrivningen väljer en sådan explicit och hämtar
   ingen egen dump. Kvar att verifiera på hårdvara att rött försvinner med den
   ordningen, och vilken byte som orsakade overflowen.
+- **NY BUGG: PEQ-displayen stämmer bara för post 0.** Efter frekvensrättelsen
+  (avsnitt 6.4) kördes den efterlysta `apply`:n: FB-D OFF på alla sex,
+  `rew_eq_suggestion_l_r_lampa_av_sep_2.json` (53 / 74 / 165 Hz) skrivet via
+  GUI:t (`history/writes/applied-20260903-125243.syx`). GUI:ts egen
+  verifiering – SysEx-läsning direkt efter pushen – var bit-exakt: rätt
+  frekvens, bandbredd och gain på alla sex poster i minnesdumpen. Men
+  **PEQ-sidans display** (avläst manuellt strax efter) visade:
+
+  | Post | Skrivet råvärde | Modellens Hz | **Display Hz** | Display bw/gain |
+  |---|---|---|---|---|
+  | L1 | `0x0405` | 52,78 | 53,250 | 37/60, −10 dB ✓ |
+  | R1 | `0x0405` | 52,78 | **0** | 37/60, −10 dB ✓ |
+  | L2 | `0x050F` | 74,11 | **0** | 34/60, −11 dB ✓ |
+  | R2 | `0x050F` | 74,11 | **0** | 34/60, −11 dB ✓ |
+  | L3 | `0x0903` | 165,28 | **68 018** | 28/60, −11,5 dB ✓ |
+  | R3 | `0x0903` | 165,28 | **0** | 28/60, −11,5 dB ✓ |
+
+  Bandbredd och gain (avrundade till enhetens 0,5 dB-raster) är rätt på
+  **samtliga sex** poster – alltså sitter `PEQ_BIT_OFFSET`/`PEQ_REC_BITS` och
+  postgränserna rätt, för de fälten läses ur exakt samma 32-bitarspost
+  omedelbart efter frekvensfältet. Bara frekvensen är fel, och bara för post
+  1–5; post 0 (L1) stämmer inom rimlig avrundning (53,25 vs modellens 52,78 –
+  samma storleksordning som avrundningen i tidigare displayavläsningar, t.ex.
+  0x0527 → 96,150 mot modellens 96,11).
+
+  R1 har **exakt samma råa 13 bitar** som L1 (samma `rec`-dict, skrivet till
+  två poster) men visar 0 där L1 visar rätt frekvens – det pekar mot att
+  postens *plats* (index ≥ 1), inte bitmönstret i sig, är vad som ger fel
+  resultat. Två hypoteser, ingen testad än:
+  1. **Displayen har inte laddat om frekvensfältet** för rader som inte är
+     markerade/senast visade efter en dump-inladdning, medan bw/gain av
+     någon annan anledning redan är korrekta. Skulle försvinna av att
+     bläddra till varje rad på PEQ-sidan (eller lämna sidan och gå
+     tillbaka) utan att ändra något.
+  2. **Frekvensfältet tolkas verkligen annorlunda för post ≥ 1** än post 0 –
+     en skillnad som inte skulle synas i data-offset/gain-testerna ovan
+     (som alla involverade destroyer-SKRIVNA poster, inte poster vi själva
+     skrev till index > 0 i isolation) och som inte skulle försvinna av att
+     bara bläddra.
+
+  **Ingen kod är ändrad för det här** – `patch_dump`/`peq_freq_raw` är
+  oförändrade sedan förra commiten. Nästa steg: `apply` med *bara* L1 satt
+  (övriga `None`) för att bekräfta den ensam, sedan `apply` med *bara* L2
+  satt för att se om post-index 2 i isolation beter sig likadant – det
+  skiljer hypotes 1 från 2.
+
+- **EQDESIGN.EXE disassemblerad** (archive.org, 846 kB, MFC/Win95, 6.8).
+  Sändaren bygger `F0 00 20 32 <kanal−1> 01 …`; tolv kommandon; 7→8-packningen
+  är identisk med vår bitström; minnesbilden är 10 + 104 + 76 + 100 × 104
+  byte. Validerat mot `dumps/`: programnamn i klartext (`AUT O Q`,
+  `BAS  ROCK`, `MOVIE` …), programnummer 9 = display 10, huvudets crossfade
+  10 s / shelving 27 dB/okt, PEQ-posten byteinriktad (vår låg tre bitar snett
+  – därav `aUT O Q`), frekvensen linjär i tjugondelar (96,150 Hz och 17/18/19
+  kHz exakt). `33`-ramen är 32 = 0 dB, inte CC-skalan. Nytt `./run.sh raw
+  <hex…>` för att prova kommandona mot enheten.
 
 ---
 
@@ -672,7 +798,7 @@ Notera de **tre olika GEQ-skalorna**: CC 0–127 (mitt 64), ADRStudio `10h`
 | MIDI OUT | "ingen funktion" | CC, PC, SysEx |
 | SysEx | nej | ja |
 | Memory dump | – | SND/RCV MEMORY DUMP |
-| Granulär realtids-SysEx | – | bara DSP8024 |
+| Granulär SysEx | – | ja: EQ-Design:s `20`–`23`, `41`–`44` (6.8) – DSP8024 har en annan uppsättning (bilaga A) |
 | PC-editor | – | EQ-Design (DSP8000 OS ≥ 2.0 / DSP8024 OS ≥ 1.1) |
 
 OS-versionen visas kort i displayen vid påslag – **testenhetens version är
@@ -693,16 +819,13 @@ Control Change O/O, Program Change 0–99 O/O, System Exclusive O/O, allt annat
 
 **EQ-Design 1.0** (Behringer, daterad 1996-12-09) **finns på archive.org**:
 [archive.org/details/eqdes](https://archive.org/details/eqdes), `eqdes.zip` →
-`EQDESIGN.EXE` (846 kB), kontrollerat 2026-09-03. Enligt arkivets beskrivning
-"a real 32-bit application" för Windows 95/NT som kräver DSP8000 OS ≥ 2.0 och
-ett MPU-401-kompatibelt MIDI-interface; styr EQ, delay, noise gate och
-limiter, har "Program/Control Change or SYSEX MIDI control modes" samt "MIDI
-dump requests and user memory updates". Ej testad här. Givet att DSP8000
-bara kan dumpa allt talar den troligen `4F`-dump fram och tillbaka – men att
-den styr delay/gate/limiter betyder att den antingen patchar dumpen precis
-som `apply`, eller känner till kommandon vi inte hittat. Att sniffa dess
-MIDI-trafik (Windows 98/XP i en VM med USB-MIDI genomkopplat, `monitor` på
-en andra port) är den snabbaste vägen till de okartlagda bitfälten.
+`EQDESIGN.EXE` (846 kB). Enligt arkivets beskrivning "a real 32-bit
+application" för Windows 95/NT som kräver DSP8000 OS ≥ 2.0 och ett
+MPU-401-kompatibelt MIDI-interface. **Disassemblerad 2026-09-03** – protokollet
+och minnesbilden står i 6.8. Den använder både hela dumpen (`4F`) och
+granulära kommandon (`20`–`23`, `40`–`44`, `15`/`11`), så DSP8000 med OS ≥ 2.0
+*har* granulär SysEx – bara inte DSP8024:s. Att köra den skarpt (Windows
+98/XP i en VM med USB-MIDI genomkopplat) återstår.
 
 **ADRStudio StudioWare-panel** för Cakewalk/Sonar: DSP8024-only, SysEx.
 
@@ -730,7 +853,8 @@ en andra port) är den snabbaste vägen till de okartlagda bitfälten.
   via EPROM; sparad Wayback-kopia: `keiths-blog-dsp8024-firmware-upgrade.html`.
   Gäller DSP8024, inte DSP8000.
 - **EQ-Design 1.0** – [archive.org/details/eqdes](https://archive.org/details/eqdes)
-  (`EQDESIGN.EXE`, 846 kB, 1996-12-09). Behringers Windows 95/NT-editor, bilaga B.
+  (`EQDESIGN.EXE`, 846 kB, 1996-12-09). Behringers Windows 95/NT-editor,
+  disassemblerad 2026-09-03 – avsnitt 6.8, bilaga B.
 - **Firmware 2.0C** – EPROM-säljare [monotanz.de](https://monotanz.de/product/behringer-dsp-8000-version-2-0-c-upgrade-firmware-upgrade-eprom-os-for-dsp8000-download/),
   [reverb.com](https://reverb.com/uk/item/30262743-behringer-dsp8000-version-2-0c-update-firmware-upgrade-eprom).
 - Audiofanzine (franska): [EQ-Design-tråd](https://fr.audiofanzine.com/eq-graphique/behringer/ultra-curve-dsp8000/forums/t.297918,behringer-dsp8000-eq-design-logiciel.html),

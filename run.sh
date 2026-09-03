@@ -24,6 +24,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh sysex                  fråga enheten via SysEx (dumpar minnet, se docs/midi.md)
   ./run.sh readback               läs enhetens GEQ-band + 6 PEQ-filter ur dumpen (ändrar inget)
   ./run.sh grab FIL.syx           hämta en dump och spara (bygg bibliotek av kända tillstånd)
+  ./run.sh raw 43                 skicka F0 00 20 32 00 01 <hex…> F7 och visa svaret (EQ-Design-kommandona, docs/midi.md 6.8)
   ./run.sh push [--send-only] FIL.syx  skicka en dump till enheten (RCV MEMORY DUMP-test, protokoll i docs/midi.md avsnitt 4)
   ./run.sh apply [--dry-run]      patcha enhetens dump med rew_eq_suggestion.json (GEQ+PEQ) och pusha tillbaka
   ./run.sh roundtrip [--keep]     hårdvarutest av dump-vägen: skriv känt GEQ+PEQ-mönster, läs tillbaka, återställ
@@ -54,7 +55,7 @@ fi
 .venv/bin/pip install -q --disable-pip-version-check -r requirements.txt
 
 case "$1" in
-  ports|monitor|sysex|readback|grab|push|apply|roundtrip|probe|calibrate|send)
+  ports|monitor|sysex|readback|grab|raw|push|apply|roundtrip|probe|calibrate|send)
     exec .venv/bin/python rew_to_dsp8000.py "$@" ;;
   gui)
     shift; exec .venv/bin/python run_gui.py "$@" ;;

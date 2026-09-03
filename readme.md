@@ -50,8 +50,9 @@ Schwedisch.
 ## Enheten i korthet
 
 **Behringer Ultra-Curve DSP8000**, originalmodellen. Skillnad mot PRO/DSP8024:
-20-bit AD/DA (ej 24-bit), enklare MIDI (hela minnesdumpen via SysEx, ingen
-granulär styrning), delay och AES/EBU som tillval.
+20-bit AD/DA (ej 24-bit), en annan SysEx-uppsättning än DSP8024:s
+(EQ-Design:s, [docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)),
+delay och AES/EBU som tillval.
 
 - 31-bands grafisk EQ per kanal (ISO-tersband, 20 Hz–20 kHz), ±16 dB i 0,5 dB-steg
 - 3 fullparametriska filter per kanal (+16…−48 dB) – **delas med Feedback Destroyer**
@@ -99,7 +100,8 @@ AudioBox USB som MIDI-interface. Full referens och testlogg: [docs/midi.md](docs
 | Fader-rörelse → läsbar GEQ-status | DSP → dator | **fungerar** (`33 09`-frame) |
 | Avkoda GEQ + PEQ ur dumpen | – | **avkodat och verifierat** |
 | RCV MEMORY DUMP (skriva en dump tillbaka) | dator → DSP | **fungerar med knapptryck** på enheten |
-| Skriva GEQ **och** PEQ via patchad dump | dator → DSP | **verifierat** (roundtrip 2026-09-03); en `apply` med rättad PEQ-frekvens återstår |
+| Skriva GEQ **och** PEQ via patchad dump | dator → DSP | GEQ **verifierat**; PEQ-**värdena** i dumpen stämmer (SysEx-återläsning bit-exakt), men PEQ-**displayen** visar fel frekvens för post 2–6 (se "Vad vi inte vet") |
+| EQ-Design:s protokoll: 12 kommandon + hela minnesbilden | – | **avkodat ur EQDESIGN.EXE** 2026-09-03; bilden verifierad mot våra dumpar, kommandona (`21` GEQ, `22` PEQ, `43`/`44` …) otestade |
 | CC ut vid fader-rörelse | DSP → dator | sett i capture, ej systematiskt testat |
 | DSP8024:s granulära SysEx (ADRStudio) | – | **dött** på DSP8000 |
 
@@ -138,43 +140,45 @@ meddelanden och läs tillbaka efteråt.
 
 ```
 Förfrågan:  F0 00 20 32 00 01 70 <xx> F7
-Svar:       F0 00 20 32 00 01 4F <sub> <flag> 20 00  <12100 databyte>  F7
+Svar:       F0 00 20 32 00 01 4F <12104 databyte> F7
 ```
 
-`00 20 32` = Behringers manufacturer-ID, `01` = modell DSP8000 (`0E`, som är
-DSP8024, ignoreras helt). Oavsett `xx` svarar enheten med **hela minnet** – det
-finns ingen granulär läsning och ingen versionssträng. Enheten måste stå på
-EQ-huvudskärmen. Förfrågan ändrar ingenting.
+`00 20 32` = Behringers manufacturer-ID, `00` = device-ID = MIDI-kanal − 1
+(enligt EQ-Design), `01` = modell DSP8000 (`0E`, som är DSP8024, ignoreras
+helt). Oavsett `xx` svarar enheten med **hela minnet**; EQ-Design begär samma
+sak med `40` och har därtill granulära kommandon vi inte provat
+([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)).
+Enheten måste stå på EQ-huvudskärmen. Förfrågan ändrar ingenting.
 
-Databytena är alla < 128 men **bit-packade**: de packas upp MSB-först, 7 bitar
-per byte, till en bitström som fälten läses ur.
+Databytena är alla < 128 och **7-bitars-packade** MSB-först: 8 databyte =
+7 minnesbyte, en minnesbild på 10591 byte. Det finns ingen header efter `4F`
+– det vi kallade sub-kod är statusflaggor i bildens första byte.
 
 ### Avkodad dump-layout
 
-| Block | Bit-offset | Data-offset | Format |
-|---|---|---|---|
-| Okänt (arbetsbuffert) | 0–86 | 0–12 | lika i alla dumpar; kandidat: limiter/gate/delay/flaggor |
-| **PEQ** | 87–278 | 12–39 | 6 poster à 32 bitar, ordning L1 R1 L2 R2 L3 R3 |
-| Okänt mönster | ~278–340 | 39–47 | satt i knapp-dumpar, noll i förfrågnings-dumpar |
-| **GEQ** | 372–883 | 53–126 | 64 tecknade 8-bitarsvärden: 31 vä band, vä master, 31 hö, hö master |
-| Resten | 885– | 127– | **ej kartlagt** (delay, gate, limiter, de 100 programmen …) |
+| Minnesbyte | Innehåll |
+|---|---|
+| 0–9 | huvud: statusflaggor, crossfade (s), shelving (×3 dB/okt), limiter, gate, aktuellt program |
+| 10–113 | **program 0 = arbetsbufferten**: delay L/R (2+2), 6 PEQ-poster à 4 byte (L1 R1 L2 R2 L3 R3), namn 12 tecken, GEQ L 32, GEQ R 32 |
+| 114–189 | 76 byte som EQ-Design hoppar över – okänt |
+| 190– | program 1–100 à 104 byte, samma layout som arbetsbufferten |
 
-GEQ-värde: **0,5 dB per enhet**, `dB = värde / 2`, ±32 = ±16 dB – enhetens
-egna steg, alltså halva CC-skalans upplösning. Master (index 31 och 63) ligger
-i samma block och på samma skala. Blocket låg felkartlagt på bit 373/kvarts-dB
-fram till 2026-09-03; rättelsen och vad felet ställde till med står i
-[docs/midi.md 6.4](docs/midi.md#64-avkodad-layout-verifierad-med-probe--probe---manual).
+Kartlagt ur EQ-Design 2026-09-03 och verifierat mot våra dumpar: programnamnen
+läses i klartext (`BAS  ROCK`, `MOVIE`, `AUT O Q` …) och huvudets
+programnummer stämmer med displayen. Fullständig tabell:
+[docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03).
 
-PEQ-post, 32 bitar: frekvens 13 bitar (**5 bitar ISO-bandindex + 8 bitar
-finsteg om 1/64 oktav**, `f = ISO[raw>>8] · 2^((raw&255)/64)`), bandbredd
-8 bitar (`(raw+1)/60` oktav), gain 10 bitar tvåkomplement (`dB = raw/8`).
-Postens sista bit tillhör nästa block och skrivs inte. Posten helt noll =
-inga värden satta. Verifierat mot handsatta filter (1 kHz = `0x1100`) och
-enhetens egna destroyer-filter avlästa på displayen (96 Hz, 17/18/19/20 kHz).
-Kodningen är inte entydig – finsteget får överstiga ett tersband, och enheten
-skrev själv `0x0527` (63 Hz + 39 steg) för 96 Hz – men alla varianter läses
-lika; vi skriver alltid närmaste band under. FB-D-läget (ON/OFF/SGL) ligger
-inte i dumpen.
+GEQ-värde: **0,5 dB per enhet**, tecknad byte, `dB = värde / 2` – enhetens
+egna steg, halva CC-skalans upplösning. Master (index 31) i samma block och
+skala. `apply` skriver inte master: en rumskorrigering ska inte flytta utnivån.
+
+PEQ-post, 4 byte: **ISO-bandindex**, **finsteg** (tjugondelar av avståndet
+till nästa ISO-frekvens, linjärt: `0x0527` = 63 + 17·39/20 = 96,150 Hz, exakt
+vad displayen visar), **bandbredd** (`(raw+1)/60` oktav), **gain** (tecknad
+byte, 0,5 dB). Posten helt noll = inga värden satta. FB-D-läget (ON/OFF/SGL)
+ligger inte i dumpen. Fram till 2026-09-03 låg vår post tre bitar snett med
+10-bitars gain – halva dB blev rätt ändå, åttondelar skrev över nästa posts
+bandindex och programnamnets första tecken.
 
 ### Skriva allt: RCV MEMORY DUMP
 
@@ -206,32 +210,26 @@ knapptryck på enheten och två dumpar. Det som kräver enheten står också som
 bockbar lista i [checklistan](#checklista-verifiera-på-hårdvara) nedan,
 tillsammans med det Gemini-rapporten påstår men inte kan belägga.
 
-### Dumpen: ~95 % av minnet är okartlagt
+### Dumpen: kartlagd via EQ-Design, några hål kvar
 
-- **Data-offset 127 och framåt är inte kartlagt.** Där ligger delay, noise
-  gate, limiter, RTA-inställningar och de 100 sparade programmen. Därför rör
-  `apply` dem inte – de bevaras orörda från basdumpen. Metod: `probe --manual`,
-  ändra *en* sak på enheten, diffa.
-- **De första 12 databytena** (`80 36 00 00 00 02 33 16 …`) är lika i alla
-  dumpar. Arbetsbuffert-flaggor? Limiter/gate/delay?
-- **Finns en checksumma?** 9 byte vid data-offset 39–47 är satta i
-  knapp-dumpar men noll i förfrågnings-dumpar, och mönstret återkommer vid
-  199–207. Om det är en checksumma över något vi ändrar borde en patchad dump
-  ha avvisats – det gjorde den inte, så troligen inte. Obekräftat.
-- **Sub-koden i `4F`-svaret varierar:** `4F 0A`, `4F 04` och `4F 12` har alla
-  setts från samma enhet. Byte 7 bär enhetsstatus snarare än format – vad `04`
-  betyder är oklart, och just den varianten dök upp i den enda skrivning som
-  gav röd overflow-LED.
-- **12100 = 100 × 121 går jämnt ut**, men mönstret vid data 39 återkommer vid
-  199 (delta 160, inte 121). "100 program × 121 byte" är alltså **inte**
-  bekräftat.
-- ~~**PEQ-gainets LSB.**~~ **Bredden avgjord 2026-09-03:** 10 bitar à 1/8 dB
-  (bit 278 är satt i orörda dumpar, alltså nästa block). Enheten behåller ett
-  udda åttondels-värde byte-exakt (−9,75 dB lästes tillbaka som −9,75), men
-  när destroyern själv skrev om fem filter landade alla på 0,5 dB-steg
-  (−9,75 → −10, −10,75 → −11, −11,375 → −11,5). **Okänt:** vad displayen visar
-  och DSP:n gör med −9,75. Test: skriv ett filter med udda åttondel, FB-D
-  OFF, läs displayen.
+- ~~Data-offset 127 och framåt är inte kartlagt~~ **Kartlagt 2026-09-03** ur
+  EQ-Design: huvud 10 byte, arbetsbuffert 104, gap 76, program 1–100 à 104
+  byte med delay, PEQ, namn och GEQ. `apply` rör fortfarande bara GEQ/PEQ i
+  arbetsbufferten.
+- **Huvudets statusbyte** (byte 0) varierar mellan avläsningar (`24`, `15`,
+  `09`). EQ-Design modellerar bit 1 och 6; vad bitarna betyder (IN/OUT?
+  EQ/RTA-skärm? stereolink?) är okänt. `probe --manual`, ändra en sak, se
+  byte 0.
+- **Gapet på 76 byte** (minnesbyte 114–189) som EQ-Design hoppar över:
+  `21 35 34 00 2f 00 31` på testenheten. RTA-inställningar? Mic-korrektion?
+- **Delayens enhet:** 16 bit rått per kanal; EQ-Design räknar med 48 kHz så
+  troligen sampel. Sätt 10 ms på enheten, `probe --manual`.
+- ~~Finns en checksumma?~~ Nej – EQ-Design skickar oinitierat stackskräp i
+  gapet och enheten tar emot dumpen.
+- ~~12100 = 100 × 121~~ – det är 10 + 104 + 76 + 100 × 104 (+ 1 byte fyll).
+- ~~Sub-koden i `4F`-svaret varierar~~ – det är statusbyten ovan, ingen header.
+- ~~PEQ-gainets LSB~~ – gain är en tecknad byte i 0,5 dB; de "extra bitarna"
+  var nästa posts bandindex och, för R3, programnamnets första tecken.
 
 ### Skrivvägen
 
@@ -252,14 +250,48 @@ tillsammans med det Gemini-rapporten påstår men inte kan belägga.
   (−1 dB blev +63 dB, 28 av 62 band över +16 dB). Rättat och låst av ett test
   mot hårdvarudumpen `dumps/dsp8000_sysex_edges.syx`. Skrivningen efter
   rättelsen landade bit för bit och gav sund EQ (alla band inom ±16 dB).
-- **Nästa hårdvarutest: en `apply` med allt rättat.** Frekvenskodningen
-  rättades 2026-09-03 kl. 11:22, *efter* dagens sista `apply`, så ingen
-  skrivning med rätt PEQ-frekvenser är gjord ännu. Kör: FB-D **OFF** på alla
-  sex filtren → `apply` → PEQ-sidan ska visa kurvans frekvenser (förra gången
-  stod 96/424/269 Hz där kurvan sa 53/74/166) och de ska stå kvar → IN/OUT-LED
-  grön, inte röd → REW-sweep som visar att filtren bearbetar ljudet med FB-D
-  OFF. Det sista är inte verifierat: OFF *bör* betyda stillastående
-  parametriskt filter, men bara en sweep avgör.
+- **NY BUGG 2026-09-03 12:52: PEQ-frekvensen på displayen stämmer bara för
+  post 0 (L1).** Kördes med FB-D OFF på alla sex, precis som ovan. Dumpen som
+  skickades (`history/writes/applied-20260903-125243.syx`) och den omedelbara
+  SysEx-återläsningen är bit-identiska – enheten tog emot exakt det vi
+  avsåg (L1/R1 53 Hz, L2/R2 74 Hz, L3/R3 165 Hz, alla med rätt bandbredd och
+  gain). Men **PEQ-sidans display** visade något helt annat:
+
+  | Post | Skrivet (raw) | Display frekvens | Display bw/gain |
+  |---|---|---|---|
+  | L1 | `0x0405` (band 4=50 Hz, fin 5 → 52,78 Hz) | 53,250 Hz | 37/60, −10 dB – **rätt** |
+  | R1 | `0x0405` (samma) | **0 Hz** | 37/60, −10 dB – rätt |
+  | L2 | `0x050F` (band 5=63 Hz, fin 15 → 74,11 Hz) | **0 Hz** | 34/60, −11 dB – rätt |
+  | R2 | `0x050F` (samma) | **0 Hz** | 34/60, −11 dB – rätt |
+  | L3 | `0x0903` (band 9=160 Hz, fin 3 → 165,28 Hz) | **68,018 kHz** | 28/60, −11,5 dB – rätt |
+  | R3 | `0x0903` (samma) | **0 Hz** | 28/60, −11,5 dB – rätt |
+
+  Bandbredd och gain (avrundat till enhetens 0,5 dB-raster) stämmer på **alla
+  sex** poster. Bara frekvensen är fel, och bara för post 1–5 – post 0 (L1)
+  visar rätt (inom rimlig avrundning). Eftersom bw/gain sitter i samma
+  32-bitarspost direkt efter frekvensfältet är postgränserna och
+  `PEQ_BIT_OFFSET`/`PEQ_REC_BITS` alltså rätt – felet sitter isolerat i hur
+  displayen tolkar frekvensbitarna för post ≥ 1, inte i var posten börjar.
+
+  **Två hypoteser, ingen bekräftad:**
+  1. Displayen har inte ritat om frekvensfältet för orörda rader efter en
+     dump-inladdning (bara den markerade/senast visade raden uppdateras;
+     bw/gain "råkar" ändå vara rätt av någon annan anledning) – skulle
+     försvinna av att bläddra till varje rad på PEQ-sidan utan att ändra
+     något, eller lämna och gå tillbaka till sidan.
+  2. Frekvensfältet kodas/tolkas verkligen annorlunda för post ≥ 1 än post 0 –
+     skulle inte försvinna av att bläddra.
+  Går inte att skilja utan ett nytt hårdvarutest. **Kvar:** skriv *bara* L1
+  (övriga OFF/None) och bekräfta den ensam; skriv sedan *bara* L2 (övriga
+  OFF) och se om den är rätt i isolation – det avgör om det är radordningen
+  eller postindexet som spökar. `apply`/`patch_dump` är **inte** ändrade för
+  detta – ingen kod är rättad, bara observationen dokumenterad.
+
+- **EQ-Design:s granulära kommandon** `21` (GEQ, 66 byte opackat) och `22`
+  (PEQ, 32 packade byte) skulle ge skrivning **utan RCV MEMORY DUMP-knappen**,
+  och `20` sätter limiter/gate/crossfade/delay. Otestade:
+  `./run.sh raw 21 00 <32 L> <32 R>` med 32 = 0 dB
+  ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)).
 
 ### MIDI-detaljer
 
@@ -269,18 +301,18 @@ tillsammans med det Gemini-rapporten påstår men inte kan belägga.
 - **PROG SND** – skickar enheten Program Change när man byter program för
   hand? Bör synas i `monitor`, aldrig testat.
 - **CC ut vid fader-rörelse** är sett men inte systematiskt kartlagt.
+- **`33`-ramens skala** är satt till 32 = 0 dB i 0,5 dB-steg (EQ-Design:s
+  `21`-format; master 15/16 = −8,5/−8 dB stämmer med dumpen), inte CC-skalan
+  som `monitor` visade förut. Verifiera: sätt 1 kHz till +8 dB på fronten,
+  `monitor` ska visa +8.0 (råvärde 48).
 
 ### Övrigt värt att prova
 
-- **EQ-Design 1.0** (Behringers Windows 95/NT-editor) **finns på archive.org**:
-  [archive.org/details/eqdes](https://archive.org/details/eqdes), `EQDESIGN.EXE`
-  846 kB daterad 1996-12-09, kräver DSP8000 OS ≥ 2.0 och ett
-  MPU-401-kompatibelt interface. Arkivets beskrivning säger att den styr
-  delay, gate och limiter och gör "MIDI dump requests and user memory
-  updates". Kör den i en Windows 98/XP-VM med USB-MIDI genomkopplat och
-  sniffa trafiken: pratar den bara `4F`-dumpar fram och tillbaka, eller finns
-  kommandon vi inte hittat? Dess delay/gate/limiter-reglage ger de bitfälten
-  gratis. Mer i [docs/midi.md bilaga B](docs/midi.md#bilaga-b-os-versioner-modellskillnader-pc-mjukvara).
+- **EQ-Design 1.0** är disassemblerad – protokoll och minnesbild i
+  [docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03).
+  Kvar: köra den skarpt i en Windows 98/XP-VM mot enheten, främst för
+  RTA-strömmen (`15`/`11`) och för att se om den skriver `21`/`22` live när
+  man drar reglagen.
 - **Bandvärdena bygger på en enpunktsmätning** och räknas band för band utan
   modell av hur 1/3-oktavsfiltren överlappar. Mät på fler positioner och
   medelvärdesbilda i REW – och kör `refine`-varvet.
@@ -308,12 +340,13 @@ körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlo
 - [ ] **Samplingsfrekvens.** GLOBAL SETUP → INPUT: finns 44,1/48 kHz
   ([docs/midi.md 2](docs/midi.md#2-midi-setup-sidan)) eller är den fast 44,1
   **[G]**? Avgör om rew.md:s "48 kHz" stämmer.
-- [ ] **Finns DELAY och crossfade i menyerna?** DELAY 8000 är tillval; **[G]**
-  nämner programmerbar crossfade-tid vid programbyte (ADRStudio `23`, 0–15 s
-  på DSP8024). Finns den: `probe --manual` för att se om den ligger i dumpen.
-- [ ] **Programnamn. [G]**: 100 minnen med alfanumeriska namn. Går det att
-  döpa? Då: döp ett program unikt, spara, `grab`, sök mönstret – snabbaste
-  vägen till programblocken ([docs/midi.md 6.7](docs/midi.md#67-kartlägga-fler-fält)).
+- [ ] **Crossfade och shelving i menyerna.** Dumpens huvud säger crossfade
+  **10 s** och shelving **27 dB/okt** på testenheten (EQ-Design:s tolkning).
+  Finns inställningarna i SETUP, och stämmer värdena? DELAY 8000-kortet:
+  finns DELAY-sidan alls?
+- [ ] **Programnamn på fronten.** Dumpen har 12-teckensnamn (`BAS  ROCK`,
+  `MOVIE`, `AUT O Q` … – `syx_tools.py eq` listar dem). Var döper man om, och
+  visar displayen namnet vid programbyte?
 
 **En signal och öronen**
 
@@ -329,9 +362,18 @@ körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlo
 - [ ] **Svarar enheten från RTA-skärmen? [G]** (och ADRStudio för DSP8024):
   SysEx tas emot på EQ- *och* RTA-skärmen, inte i SETUP, LEVEL METER, FB-D,
   PEQ. Bara EQ-skärmen är testad. `./run.sh grab` från varje skärm.
-- [ ] **Device-ID = MIDI-kanal? [G]**. Vi skickar alltid `00` med CHANNEL 1.
-  Sätt CHANNEL 2, skicka `70 01` med dev `00`, `01` och `7F` (`_send_sysex`
-  i `rew_to_dsp8000.py`): vilka besvaras?
+- [ ] **Device-ID = MIDI-kanal − 1.** Så gör EQ-Design, och `44`-svaret ska
+  bära enhetens kanal. Vi har bara kört `00` med CHANNEL 1. Sätt CHANNEL 2:
+  `./run.sh raw 43` med `00` (ska tigas ihjäl?) – och ändra `_send_sysex`:s
+  dev till `01`.
+- [ ] **EQ-Design:s kommandon**, alla otestade
+  ([docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03)):
+  `./run.sh raw 43` ska ge ett `44`-svar; `raw 40` dumpen; `raw 41` / `raw 42`
+  ska byta EQ/RTA på displayen; `raw 15 00` ska ge en `11`-RTA-ram; `raw 21 00`
+  + 64 byte (32 = 0 dB) ska skriva GEQ **utan knapptryck**; `raw 22 00` + 32
+  packade byte ska skriva PEQ. Lyckas `21`/`22` blir `apply` knappfri.
+- [ ] **`33`-ramens skala:** 1 kHz till +8 dB på fronten, `monitor` ska visa
+  +8.0 (råvärde 48, inte 96).
 - [ ] **CC utanför 0–63. [G]**: master, bypass och limiter kan styras via CC.
   Med CNTL RCV 0 är CC 64–127 lediga: skicka dem ett i taget med displayen i
   ögonvrån. Bypass via MIDI vore guld för REW-mätningen.
@@ -342,9 +384,14 @@ körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlo
 - [ ] **Programminne kontra arbetsbuffert:** spara ett känt program, `roundtrip
   --keep`, byt till programmet och tillbaka – vad står kvar? Syns pushen
   direkt på displayen?
-- [ ] **`apply` med allt rättat** (punkten "Nästa hårdvarutest" ovan): FB-D
-  OFF ×6 → `apply` → PEQ-sidan visar kurvans frekvenser → LED grön →
-  REW-sweep visar att OFF-filtren bearbetar ljudet.
+- [x] **`apply` med allt rättat**, kört 2026-09-03 12:52 – avslöjade i stället
+  "NY BUGG"-punkten ovan (PEQ-displayen fel för post 2–6). REW-sweepen och
+  LED-kollen är därför inte meningsfulla förrän den bilagd.
+- [ ] **Isolera PEQ-displaybuggen ("NY BUGG" ovan):** `apply` med *bara* L1
+  satt (L2/L3/R1–R3 = None/OFF) → stämmer L1 ensam? Sedan `apply` med *bara*
+  L2 satt → stämmer den i post-index 2, eller är felet knutet till
+  rad-ordningen på displayen snarare än postindexet? Testar om det försvinner
+  av att bläddra till raden på PEQ-sidan utan att ändra något.
 - [ ] **PEQ-gain på udda åttondel** (−9,75 dB, FB-D OFF): vad visar displayen,
   och hörs/mäts −9,75 eller −10?
 
