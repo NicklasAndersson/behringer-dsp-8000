@@ -19,7 +19,8 @@ SND MEMORY DUMP / SysEx-svar (`F0 00 20 32 00 01 4F 0A|12 …  F7`):
     (20 Hz–20 kHz), vä master, 31 hö band, hö master. **0,5 dB per enhet**
     (dB = värde / 2, ±16 dB = ±32) — enhetens egna steg, inte CC:ts 0,25 dB.
   * PEQ: 6 poster à 32 bitar från bit PEQ_BIT_OFFSET, ordning L1 R1 L2 R2 L3 R3.
-    Per post: frekvens (13 bit, f = 20·10^(raw/2560) Hz, 20 Hz = 0, 20 kHz = 7680),
+    Per post: frekvens (13 bit = 5 bit ISO-bandindex + 8 bit finsteg om
+    1/64 oktav, se peq_freq_hz),
     bandbredd (8 bit, (raw+1)/60 oktav), gain (10-bit tvåkomplement, dB = raw/8).
     Postens sista bit tillhör nästa (okartlagda) block - skriv den inte.
     Filtrens PÅ/AV och läge (PAR/AUT/SGL) lagras INTE i dumpen (verifierat
@@ -39,10 +40,10 @@ GEQ_DB_PER_UNIT = 0.5         # dumpens steg (INTE CC:ts 0,25 dB) - verifierat 2
 GEQ_COUNT = 64               # 31 vä band + vä master + 31 hö band + hö master
 PEQ_BIT_OFFSET = 87          # bit-offset till första PEQ-posten (L1)
 PEQ_REC_BITS = 32            # bitar per PEQ-post: 13 frekvens + 8 bandbredd + 10 gain + 1 oanvänd
-PEQ_FREQ_BITS = 13           # 2560 steg per dekad; 7680 = 20 kHz (enhetens eget värde)
+PEQ_FREQ_BITS = 13           # 5 bit ISO-bandindex + 8 bit finsteg (se peq_freq_hz)
 PEQ_BW_BITS = 8              # 0-120 (1/60 oktav per steg) ryms i 8 bitar
 PEQ_GAIN_BITS = 10           # den 32:a biten i posten tillhör NÄSTA block - rör den inte
-PEQ_DECADE = 2560            # råvärden per dekad i frekvensfältet
+PEQ_FINE_PER_OCT = 64        # finstegets upplösning: 1/64 oktav över bandets ISO-frekvens
 PEQ_LABELS = ["L1", "R1", "L2", "R2", "L3", "R3"]
 
 
@@ -78,6 +79,30 @@ def decode_geq(b):
             "R": [v * GEQ_DB_PER_UNIT for v in vals[32:63]], "R_master": vals[63]}
 
 
+def peq_freq_hz(raw):
+    """PEQ-frekvensfältets 13 bitar -> Hz.
+
+    Fältet är INTE ett logaritmiskt tal utan två delar: höga 5 bitar = index i
+    de 31 ISO-tersbanden (0 = 20 Hz, 17 = 1 kHz, 30 = 20 kHz), låga 8 bitar =
+    finsteg om 1/64 oktav uppåt från bandet. Verifierat 2026-09-03 mot enheten:
+    ett handsatt 1 kHz-filter gav 0x1100 (band 17, fin 0), enhetens egna
+    destroyer-filter 0x1D00/0x1D05/0x1D0A/0x1D0F (16 kHz + 5, 10, 15 finsteg)
+    och 0x1E00 = 20 kHz, och 0x0527 (band 5 = 63 Hz, fin 39) visades som
+    96,150 Hz mot modellens 96,11."""
+    band = min(raw >> 8, len(dsp8000.ISO_BANDS) - 1)
+    return dsp8000.ISO_BANDS[band] * 2 ** ((raw & 0xFF) / PEQ_FINE_PER_OCT)
+
+
+def peq_freq_raw(freq_hz):
+    """Hz -> frekvensfältets 13 bitar. Inversen av peq_freq_hz: närmaste
+    ISO-band under frekvensen + finsteg om 1/64 oktav."""
+    import math
+    f = max(freq_hz, dsp8000.ISO_BANDS[0])
+    band = max(i for i, b in enumerate(dsp8000.ISO_BANDS) if b <= f)
+    fine = min(255, max(0, round(PEQ_FINE_PER_OCT * math.log2(f / dsp8000.ISO_BANDS[band]))))
+    return (band << 8) | fine
+
+
 def _read_uint(bits, pos, width):
     v = 0
     for i in range(width):
@@ -97,7 +122,7 @@ def decode_peq(b):
         g = _read_uint(bits, base + 21, PEQ_GAIN_BITS)
         g = g - 1024 if g >= 512 else g
         out.append({
-            "freq_hz": 20.0 * 10 ** (fr / PEQ_DECADE),
+            "freq_hz": peq_freq_hz(fr),
             "bw_oct": (bw + 1) / 60,
             "gain_db": g / 8,
             "on": bool(fr or bw or g),
@@ -172,7 +197,7 @@ def peq_raw(freq_hz, bw_oct, gain_db):
     """(frekvens, bandbredd okt, gain dB) -> (fr, bw, g) råvärden för dumpen,
     klippta till fältbredderna. Inversen av avkodningen i decode_peq."""
     import math
-    fr = max(0, min(8191, round(PEQ_DECADE * math.log10(max(freq_hz, 20) / 20))))
+    fr = peq_freq_raw(freq_hz)
     bw = max(0, min(255, round(bw_oct * 60) - 1))
     g = max(-512, min(511, round(gain_db * 8))) & 0x3FF
     return fr, bw, g

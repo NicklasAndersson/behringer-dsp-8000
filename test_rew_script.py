@@ -319,18 +319,23 @@ def test_bit_diff_finds_a_single_changed_field():
 
 
 def test_peq_record_layout_against_hardware():
-    """dumps/dsp8000_sysex_peq_device.syx skrev enheten SJÄLV (feedback destroyern
-    flyttade filtren), och displayen lästes av samtidigt: bandbredderna 37/60,
-    37/60, 34/60, 34/60, 28/60, 28/60 och det översta filtret på 20 kHz.
-    Låser fältindelningen 13 frekvens + 8 bandbredd + 10 gain: med den gamla
-    10-bitars bandbredden blev fyra av sex poster orimliga (13,4 oktav)."""
+    """dumps/dsp8000_sysex_peq_device.syx är enhetens EGEN kodning, avläst mot
+    displayen 2026-09-03: L1 sattes för hand till exakt 1 kHz, resten flyttade
+    feedback destroyern själv (16 kHz + finsteg, och 20 kHz överst).
+    Låser både fältindelningen (13 frekvens + 8 bandbredd + 10 gain - med den
+    gamla 10-bitars bandbredden blev fyra av sex poster 13,4 oktav) och
+    frekvenskodningen (ISO-bandindex + 1/64 oktav, inte ett logaritmiskt tal)."""
     fs = syx_tools.decode_peq((Path(__file__).parent / "dumps"
                                / "dsp8000_sysex_peq_device.syx").read_bytes())
     assert [round(f["bw_oct"] * 60) for f in fs] == [37, 37, 34, 34, 28, 28], \
         [f["bw_oct"] for f in fs]
     assert [f["gain_db"] for f in fs][:5] == [-10.0, -10.0, -11.0, -11.0, -11.5], fs
-    assert round(fs[5]["freq_hz"]) == 20000, fs[5]      # råvärde 7680 = 3 dekader
+    assert fs[0]["freq_hz"] == 1000.0, fs[0]           # handsatt 1 kHz = 0x1100
+    assert fs[1]["freq_hz"] == 16000.0, fs[1]          # 0x1D00
+    assert fs[5]["freq_hz"] == 20000.0, fs[5]          # 0x1E00
     assert all(20 <= f["freq_hz"] <= 20000 for f in fs), [f["freq_hz"] for f in fs]
+    # och inversen träffar samma råvärden
+    assert syx_tools.peq_freq_raw(1000) == 0x1100 and syx_tools.peq_freq_raw(20000) == 0x1E00
 
 
 def test_geq_offset_and_scale_against_hardware():
@@ -358,7 +363,7 @@ def test_decode_peq_roundtrips_a_record():
     payload = bytearray(10 + 12100)
     payload[5:8] = b"\x4f\x0a\x40"
     bits = []
-    fr = round(2560 * math.log10(1000 / 20))         # ~4350, 13-bitars fält
+    fr = syx_tools.peq_freq_raw(1000)                # 0x1100 = ISO-band 17, finsteg 0
     bw = 60 - 1                                        # 1,000 okt -> raw 59 (8 bitar)
     g = -6 * 8                                         # -48, 10-bitars fält (dB = raw/8)
     for val, w in ((fr, syx_tools.PEQ_FREQ_BITS), (bw, syx_tools.PEQ_BW_BITS),

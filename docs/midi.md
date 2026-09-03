@@ -309,10 +309,19 @@ som banden. `decode_geq` returnerar master rått – multiplicera med 0,5 för d
 
 | Fält | Bitar | Tolkning |
 |---|---|---|
-| frekvens | 13 | `f = 20 · 10^(raw/2560)` Hz – 20 Hz = 0, **20 kHz = 7680** (3 dekader) |
+| frekvens | 13 | **5 bit ISO-bandindex + 8 bit finsteg**: `f = ISO_BANDS[raw >> 8] · 2^((raw & 255)/64)` |
 | bandbredd | 8 | `(raw + 1) / 60` oktav, 0–120 |
 | gain | 10 | tvåkomplement, `dB = raw / 8` |
 | (oanvänd) | 1 | postens sista bit – **tillhör nästa block, skriv den inte** |
+
+**Frekvensfältet är inte ett logaritmiskt tal** utan två delar: höga 5 bitar
+är index i de 31 ISO-tersbanden (0 = 20 Hz, 17 = 1 kHz, 29 = 16 kHz,
+30 = 20 kHz), låga 8 bitar är finsteg om **1/64 oktav** uppåt från bandet.
+Verifierat 2026-09-03: ett filter satt för hand till exakt 1 kHz gav `0x1100`
+(band 17, finsteg 0), enhetens egna destroyer-filter gav `0x1D00`, `0x1D05`,
+`0x1D0A`, `0x1D0F` (16 kHz plus 5, 10 och 15 finsteg = 16,9 / 17,8 / 18,8 kHz,
+avläst som "17/18/19 kHz") och `0x1E00` = 20 kHz. Kontrollpunkt: `0x0527`
+(band 5 = 63 Hz, finsteg 39) visades som 96,150 Hz, modellen ger 96,11.
 
 Frekvens- och bandbreddsbredden är rättade 2026-09-03 (var 11 + 10). Enheten
 skrev själv om posterna medan feedback destroyern var på, och de värdena lästes
@@ -363,7 +372,7 @@ men kräver att någon rör en fader – `monitor` skriver ut den i dB.
 | `dsp8000_sysex_p16db.syx` | `4F 12` | alla 62 GEQ-band +16 dB, PEQ OFF | `test_rew_script.py`, `push`-test |
 | `dsp8000_sysex_ondemand.syx` | `4F 0A` | verklig EQ-kurva från REW-körning, PEQ OFF | exempel på förfrågnings-dump |
 | `dsp8000_sysex_edges.syx` | `4F 12` | 20 Hz, 20 kHz och master satta för hand: L −0,5 dB, R +0,5 dB, allt annat 0 | `test_rew_script.py` – låser GEQ-offset + skala mot hårdvaran |
-| `dsp8000_sysex_peq_device.syx` | `4F 12` | enhetens egen PEQ-kodning (destroyern flyttade filtren), displayen avläst samtidigt | `test_rew_script.py` – låser PEQ-postens fältindelning |
+| `dsp8000_sysex_peq_device.syx` | `4F 12` | enhetens egen PEQ-kodning: L1 satt för hand till exakt 1 kHz, resten flyttade av destroyern, displayen avläst samtidigt | `test_rew_script.py` – låser PEQ-postens fältindelning och frekvenskodningen |
 
 (En fjärde fil, `_m16db.syx`, var byte-identisk med `_p16db.syx` – en
 felnamngiven capture – och är borttagen.)
@@ -453,6 +462,14 @@ Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
   20 kHz (3 dekader à 2560). Vår skrivning blev därmed rätt frekvens ändå
   (vi skrev de 11 höga bitarna, dvs. samma värde × 4) men fel bandbredd vid
   *läsning* av enhetsskrivna poster.
+- **PEQ-frekvensen är ISO-band + finsteg, inte ett logaritmiskt tal**
+  (`history/reads/read-20260903-111815.syx`, sparad som referensdump): L1 sattes
+  för hand till exakt 1 kHz och gav `0x1100` = band 17, finsteg 0. Alla
+  avlästa punkter faller på plats (16 kHz = `0x1D00`, 20 kHz = `0x1E00`,
+  96,150 Hz = `0x0527`). **Konsekvens:** våra tidigare PEQ-skrivningar räknade
+  fram ett log-värde och landade därför på fel frekvens – den senaste
+  `apply`:n satte 96 / 424 / 269 Hz där kurvan sa 53 / 74 / 166 Hz. Bandbredd
+  och gain var rätt hela tiden. Rättat i `peq_freq_hz`/`peq_freq_raw`.
 - **Feedback destroyern äger filtren.** Samma experiment visade att enheten
   flyttade våra tre filter (53/74/166 Hz) till ~15,9–16,1 kHz och 20 kHz mellan
   skrivningen och avläsningen 12 minuter senare, och att FB-D-sidans
