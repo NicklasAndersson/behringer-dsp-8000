@@ -978,6 +978,35 @@ def test_run_gui_suggestion_named_file_and_rejects_traversal():
             run_gui.HERE = saved
 
 
+def test_suggestions_sorts_history_and_root_by_actual_mtime():
+    """suggestions() ska ranka history/suggestions/*.json och rot-filer
+    (rew_eq_suggestion*.json) i EN gemensam tidsordning - inte alla
+    history-filer före rot-filerna oavsett ålder. Annars pekar "Ladda in
+    senaste förslaget" fel så fort en rot-fil faktiskt är nyast (t.ex. en
+    körning av rew_script.py direkt i terminalen, utan --output)."""
+    import run_gui
+    saved = run_gui.HERE
+    with tempfile.TemporaryDirectory() as td:
+        run_gui.HERE = Path(td)
+        try:
+            sdir = Path(td) / "history" / "suggestions"
+            sdir.mkdir(parents=True)
+            old_hist = sdir / "suggestion-20260101-000000-old.json"
+            old_hist.write_text("{}")
+            newest_root = Path(td) / "rew_eq_suggestion.json"
+            newest_root.write_text("{}")
+            # rot-filen är faktiskt den senast ändrade
+            import os
+            import time
+            now = time.time()
+            os.utime(old_hist, (now - 100, now - 100))
+            os.utime(newest_root, (now, now))
+            files = run_gui.suggestions()["files"]
+            assert files[0] == "rew_eq_suggestion.json", files
+        finally:
+            run_gui.HERE = saved
+
+
 def test_run_gui_suggestions_and_measurements_endpoints():
     """/suggestions listar filerna nyaste först; rew_measurements proxar
     rew_script.list_measurements och blir DeviceError när REW inte svarar."""

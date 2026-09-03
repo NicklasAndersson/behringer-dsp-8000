@@ -336,12 +336,15 @@ def rew_measurements():
 
 
 def suggestions():
-    """Valbara EQ-förslag, nyaste först: history/suggestions/*.json (dina
-    körningar) + committade rew_eq_suggestion*.json i repo-roten."""
-    hist = sorted(_dir("suggestions").glob("*.json"), reverse=True)
-    rootfs = sorted(_root().glob("rew_eq_suggestion*.json"),
-                    key=lambda p: p.stat().st_mtime, reverse=True)
-    return {"files": [_rel(p) for p in hist] + [p.name for p in rootfs]}
+    """Valbara EQ-förslag, nyaste FÖRST enligt filens senast-ändrad-tid
+    (mtime) - oavsett om den ligger i history/suggestions/ (dina körningar
+    här) eller är en rew_eq_suggestion*.json i repo-roten (t.ex. en körning
+    av rew_script.py direkt i terminalen). Index 0 är alltså exakt den fil
+    "Ladda in senaste förslaget" i kontrollpanelen laddar - en enda
+    tidsordning över båda källorna, inte historik-filer före rot-filer."""
+    files = list(_dir("suggestions").glob("*.json")) + list(_root().glob("rew_eq_suggestion*.json"))
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return {"files": [_rel(p) for p in files]}
 
 
 def suggestion(name):
@@ -484,7 +487,9 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
       (ingen vald mätning = välj i kommandopanelen).</li>
   <li>Utskrift och ev. frågor hamnar i <b>Kommandopanelen</b> nedan – den öppnas
       automatiskt, svara i rutan där. När den är klar:
-      <button id="loadSug3">Ladda in senaste förslaget</button>.</li>
+      <button id="loadSug3" title="Väljer filen med senast ändrad tid i history/suggestions/ ELLER rew_eq_suggestion*.json i repo-roten (samma lista/ordning som förslagsväljaren i steg 2) och laddar den – inte nödvändigtvis just den du skapade i steg ovan, om något annat skrivits senare.">Ladda in senaste förslaget (nyaste filen)</button>
+      – laddar samma fil som hamnar överst i <code>sugSel</code> ovan; kolla
+      filnamn/tid som visas under redigeraren efteråt om du är osäker på vilken.</li>
   <li>Andra varvet (ny mätning gjord <b>med</b> EQ:n aktiv): välj bara den <b>nya</b>
       mätningen (nr2) och det förslag du vill förfina, <button id="runRefine">Refine →
       nytt förslag</button>. Ursprungsmätningen (varv 1) behöver du inte peka ut igen -
