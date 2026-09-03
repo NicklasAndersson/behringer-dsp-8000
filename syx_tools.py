@@ -19,8 +19,8 @@ SND MEMORY DUMP / SysEx-svar (`F0 00 20 32 00 01 4F 0A|12 …  F7`):
     (20 Hz–20 kHz), vä master, 31 hö band, hö master. **0,5 dB per enhet**
     (dB = värde / 2, ±16 dB = ±32) — enhetens egna steg, inte CC:ts 0,25 dB.
   * PEQ: 6 poster à 32 bitar från bit PEQ_BIT_OFFSET, ordning L1 R1 L2 R2 L3 R3.
-    Per post: frekvens (11 bit, f = 20·10^(raw/640) Hz, 20 Hz = 0),
-    bandbredd (10 bit, (raw+1)/60 oktav), gain (10-bit tvåkomplement, dB = raw/8).
+    Per post: frekvens (13 bit, f = 20·10^(raw/2560) Hz, 20 Hz = 0, 20 kHz = 7680),
+    bandbredd (8 bit, (raw+1)/60 oktav), gain (10-bit tvåkomplement, dB = raw/8).
     Postens sista bit tillhör nästa (okartlagda) block - skriv den inte.
     Filtrens PÅ/AV och läge (PAR/AUT/SGL) lagras INTE i dumpen (verifierat
     2026-09-03: slå på PEQ för hand ändrar inte en enda byte).
@@ -38,8 +38,11 @@ GEQ_BIT_OFFSET = 372          # bit-offset till första bandet i den MSB-packade
 GEQ_DB_PER_UNIT = 0.5         # dumpens steg (INTE CC:ts 0,25 dB) - verifierat 2026-09-03
 GEQ_COUNT = 64               # 31 vä band + vä master + 31 hö band + hö master
 PEQ_BIT_OFFSET = 87          # bit-offset till första PEQ-posten (L1)
-PEQ_REC_BITS = 32            # bitar per PEQ-post (11 frekvens + 10 bandbredd + 10 gain + 1 oanvänd)
-PEQ_GAIN_BITS = 10           # gain-fältets bredd; den 32:a biten tillhör NÄSTA block
+PEQ_REC_BITS = 32            # bitar per PEQ-post: 13 frekvens + 8 bandbredd + 10 gain + 1 oanvänd
+PEQ_FREQ_BITS = 13           # 2560 steg per dekad; 7680 = 20 kHz (enhetens eget värde)
+PEQ_BW_BITS = 8              # 0-120 (1/60 oktav per steg) ryms i 8 bitar
+PEQ_GAIN_BITS = 10           # den 32:a biten i posten tillhör NÄSTA block - rör den inte
+PEQ_DECADE = 2560            # råvärden per dekad i frekvensfältet
 PEQ_LABELS = ["L1", "R1", "L2", "R2", "L3", "R3"]
 
 
@@ -89,12 +92,12 @@ def decode_peq(b):
     out = []
     for k in range(6):
         base = PEQ_BIT_OFFSET + PEQ_REC_BITS * k
-        fr = _read_uint(bits, base, 11)
-        bw = _read_uint(bits, base + 11, 10)
+        fr = _read_uint(bits, base, PEQ_FREQ_BITS)
+        bw = _read_uint(bits, base + PEQ_FREQ_BITS, PEQ_BW_BITS)
         g = _read_uint(bits, base + 21, PEQ_GAIN_BITS)
         g = g - 1024 if g >= 512 else g
         out.append({
-            "freq_hz": 20.0 * 10 ** (fr / 640),
+            "freq_hz": 20.0 * 10 ** (fr / PEQ_DECADE),
             "bw_oct": (bw + 1) / 60,
             "gain_db": g / 8,
             "on": bool(fr or bw or g),
@@ -169,8 +172,8 @@ def peq_raw(freq_hz, bw_oct, gain_db):
     """(frekvens, bandbredd okt, gain dB) -> (fr, bw, g) råvärden för dumpen,
     klippta till fältbredderna. Inversen av avkodningen i decode_peq."""
     import math
-    fr = max(0, min(2047, round(640 * math.log10(max(freq_hz, 20) / 20))))
-    bw = max(0, min(1023, round(bw_oct * 60) - 1))
+    fr = max(0, min(8191, round(PEQ_DECADE * math.log10(max(freq_hz, 20) / 20))))
+    bw = max(0, min(255, round(bw_oct * 60) - 1))
     g = max(-512, min(511, round(gain_db * 8))) & 0x3FF
     return fr, bw, g
 
@@ -204,8 +207,8 @@ def patch_dump(base, geq_L=None, geq_R=None, peqs=None):
             base_bit = PEQ_BIT_OFFSET + PEQ_REC_BITS * k
             fr, bw, g = ((0, 0, 0) if rec is None
                          else peq_raw(rec["freq_hz"], rec["bw_oct"], rec["gain_db"]))
-            _set_bits(data, base_bit, 11, fr)
-            _set_bits(data, base_bit + 11, 10, bw)
+            _set_bits(data, base_bit, PEQ_FREQ_BITS, fr)
+            _set_bits(data, base_bit + PEQ_FREQ_BITS, PEQ_BW_BITS, bw)
             _set_bits(data, base_bit + 21, PEQ_GAIN_BITS, g)   # rör inte postens 32:a bit
     return base[:1 + DUMP_HEADER_LEN] + bytes(data) + base[-1:]
 

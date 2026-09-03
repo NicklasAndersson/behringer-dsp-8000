@@ -164,8 +164,8 @@ i samma block och på samma skala. Blocket låg felkartlagt på bit 373/kvarts-d
 fram till 2026-09-03; rättelsen och vad felet ställde till med står i
 [docs/midi.md 6.4](docs/midi.md#64-avkodad-layout-verifierad-med-probe--probe---manual).
 
-PEQ-post, 32 bitar: frekvens 11 bitar (`f = 20 · 10^(raw/640)` Hz), bandbredd
-10 bitar (`(raw+1)/60` oktav), gain 10 bitar tvåkomplement (`dB = raw/8`).
+PEQ-post, 32 bitar: frekvens 13 bitar (`f = 20 · 10^(raw/2560)` Hz, 20 kHz = 7680), bandbredd
+8 bitar (`(raw+1)/60` oktav), gain 10 bitar tvåkomplement (`dB = raw/8`).
 Postens sista bit tillhör nästa block och skrivs inte.
 OFF = posten helt noll. Verifierat mot 6 filter satta för hand på enheten.
 

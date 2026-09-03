@@ -318,6 +318,21 @@ def test_bit_diff_finds_a_single_changed_field():
     assert syx_tools.bit_diff(base, base) == []
 
 
+def test_peq_record_layout_against_hardware():
+    """dumps/dsp8000_sysex_peq_device.syx skrev enheten SJÄLV (feedback destroyern
+    flyttade filtren), och displayen lästes av samtidigt: bandbredderna 37/60,
+    37/60, 34/60, 34/60, 28/60, 28/60 och det översta filtret på 20 kHz.
+    Låser fältindelningen 13 frekvens + 8 bandbredd + 10 gain: med den gamla
+    10-bitars bandbredden blev fyra av sex poster orimliga (13,4 oktav)."""
+    fs = syx_tools.decode_peq((Path(__file__).parent / "dumps"
+                               / "dsp8000_sysex_peq_device.syx").read_bytes())
+    assert [round(f["bw_oct"] * 60) for f in fs] == [37, 37, 34, 34, 28, 28], \
+        [f["bw_oct"] for f in fs]
+    assert [f["gain_db"] for f in fs][:5] == [-10.0, -10.0, -11.0, -11.0, -11.5], fs
+    assert round(fs[5]["freq_hz"]) == 20000, fs[5]      # råvärde 7680 = 3 dekader
+    assert all(20 <= f["freq_hz"] <= 20000 for f in fs), [f["freq_hz"] for f in fs]
+
+
 def test_geq_offset_and_scale_against_hardware():
     """dumps/dsp8000_sysex_edges.syx lästes ur enheten 2026-09-03 med exakt sex
     kända värden satta: 20 Hz, 20 kHz och master, L −0,5 dB / R +0,5 dB.
@@ -343,10 +358,11 @@ def test_decode_peq_roundtrips_a_record():
     payload = bytearray(10 + 12100)
     payload[5:8] = b"\x4f\x0a\x40"
     bits = []
-    fr = round(640 * math.log10(1000 / 20))          # ~1088
-    bw = 60 - 1                                        # 1,000 okt -> raw 59
+    fr = round(2560 * math.log10(1000 / 20))         # ~4350, 13-bitars fält
+    bw = 60 - 1                                        # 1,000 okt -> raw 59 (8 bitar)
     g = -6 * 8                                         # -48, 10-bitars fält (dB = raw/8)
-    for val, w in ((fr, 11), (bw, 10), (g & 0x3FF, syx_tools.PEQ_GAIN_BITS)):
+    for val, w in ((fr, syx_tools.PEQ_FREQ_BITS), (bw, syx_tools.PEQ_BW_BITS),
+                   (g & 0x3FF, syx_tools.PEQ_GAIN_BITS)):
         for i in range(w):
             bits.append((val >> (w - 1 - i)) & 1)
     for i, bit in enumerate(bits):                     # posten börjar på bit 87

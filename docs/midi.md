@@ -309,10 +309,18 @@ som banden. `decode_geq` returnerar master rått – multiplicera med 0,5 för d
 
 | Fält | Bitar | Tolkning |
 |---|---|---|
-| frekvens | 11 | `f = 20 · 10^(raw/640)` Hz (20 Hz = 0, 20 kHz = 1920) |
-| bandbredd | 10 | `(raw + 1) / 60` oktav |
+| frekvens | 13 | `f = 20 · 10^(raw/2560)` Hz – 20 Hz = 0, **20 kHz = 7680** (3 dekader) |
+| bandbredd | 8 | `(raw + 1) / 60` oktav, 0–120 |
 | gain | 10 | tvåkomplement, `dB = raw / 8` |
 | (oanvänd) | 1 | postens sista bit – **tillhör nästa block, skriv den inte** |
+
+Frekvens- och bandbreddsbredden är rättade 2026-09-03 (var 11 + 10). Enheten
+skrev själv om posterna medan feedback destroyern var på, och de värdena lästes
+av på displayen samtidigt: med 10-bitars bandbredd blev fyra av sex poster
+orimliga (13,4 oktav), med 8 bitar stämmer alla sex exakt mot displayens
+`37/60`, `34/60`, `28/60`. De två bitar som frigörs hör till frekvensfältet,
+och då landar enhetens eget toppfilter på råvärde 7680 = exakt 20 kHz.
+Gain-fältet ligger kvar på bit 21–30, oförändrat och verifierat två gånger.
 
 Posten helt noll = inga värden satta. Verifierat 2026-09-02: 6 filter satta
 till −6/+1/−2/+16/+12/+6 dB på enheten → exakt match i avkodningen.
@@ -351,6 +359,7 @@ men kräver att någon rör en fader – `monitor` skriver ut den i dB.
 | `dsp8000_sysex_p16db.syx` | `4F 12` | alla 62 GEQ-band +16 dB, PEQ OFF | `test_rew_script.py`, `push`-test |
 | `dsp8000_sysex_ondemand.syx` | `4F 0A` | verklig EQ-kurva från REW-körning, PEQ OFF | exempel på förfrågnings-dump |
 | `dsp8000_sysex_edges.syx` | `4F 12` | 20 Hz, 20 kHz och master satta för hand: L −0,5 dB, R +0,5 dB, allt annat 0 | `test_rew_script.py` – låser GEQ-offset + skala mot hårdvaran |
+| `dsp8000_sysex_peq_device.syx` | `4F 12` | enhetens egen PEQ-kodning (destroyern flyttade filtren), displayen avläst samtidigt | `test_rew_script.py` – låser PEQ-postens fältindelning |
 
 (En fjärde fil, `_m16db.syx`, var byte-identisk med `_p16db.syx` – en
 felnamngiven capture – och är borttagen.)
@@ -430,6 +439,23 @@ Kandidater i tur och ordning: **limiter/gate/delay** (`probe --manual`, data
   efter en dump-skrivning. Samma par visar också att **skrivvägen nu landar exakt**:
   12112 byte tillbaka, bit för bit lika det vi skickade, med sund EQ (alla band inom
   ±16 dB på 0,5 dB-rutnätet).
+- **PEQ-postens fältindelning rättad** (`history/writes/applied-20260903-105428.syx`
+  → `history/reads/read-20260903-110621.syx`, sparad som `dumps/dsp8000_sysex_peq_device.syx`):
+  frekvens är **13 bitar** och bandbredd **8**, inte 11 + 10. Enheten skrev om
+  posterna själv medan displayen lästes av, och med den gamla indelningen blev
+  fyra av sex bandbredder orimliga (13,4 oktav) medan 8-bitarsfältet ger exakt
+  displayens `37/60`, `34/60`, `28/60`. De två frigjorda bitarna hör till
+  frekvensen, vilket sätter enhetens eget toppfilter på råvärde 7680 = exakt
+  20 kHz (3 dekader à 2560). Vår skrivning blev därmed rätt frekvens ändå
+  (vi skrev de 11 höga bitarna, dvs. samma värde × 4) men fel bandbredd vid
+  *läsning* av enhetsskrivna poster.
+- **Feedback destroyern äger filtren.** Samma experiment visade att enheten
+  flyttade våra tre filter (53/74/166 Hz) till ~15,9–16,1 kHz och 20 kHz mellan
+  skrivningen och avläsningen 12 minuter senare, och att FB-D-sidans
+  FREQUENCY-kolumn visade värden som inte fanns i dumpen (två bit-identiska
+  poster visade 89 Hz respektive 9,2 kHz). **Slå av feedback destroyern / sätt
+  PEQ-läge PAR innan en `apply`**, annars skriver enheten över frekvenserna.
+  Kvar att verifiera: att våra frekvenser står kvar när destroyern är av.
 - **Master rörs inte av en skrivning** – bekräftat på riktig data: basen hade master
   −8,5 / −8 dB (enhetens eget läge, bekräftat av användaren) och de värdena står kvar
   efter `apply`. Med den gamla, felskjutna modellen hamnade sista bandets skrivning
