@@ -161,8 +161,11 @@ Fristående sida som pratar MIDI direkt från webbläsaren – behöver varken
 sak via servern; den här filen finns kvar för master/program, avläsning och
 offline-bruk.
 
-Öppna i **Chrome/Edge** (Web MIDI). Blockeras `file://`:
-`python3 -m http.server` → `http://localhost:8000/dsp8000_gui.html`.
+Publicerad på GitHub Pages (main/root, `index.html` skickar vidare hit):
+**<https://nicklasandersson.github.io/behringer-dsp-8000/>**. Web MIDI med
+SysEx kräver secure context, så https-versionen funkar där `file://` blockeras.
+Öppna i **Chrome/Edge**. Lokalt: `python3 -m http.server` →
+`http://localhost:8000/dsp8000_gui.html`.
 
 - 31-bands GEQ ±16 dB, läge Länkad / Endast L / Endast R. Under draget går
   varje band som CC (live); **"Skriv GEQ + PEQ"** skickar hela kurvan atomärt

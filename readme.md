@@ -12,6 +12,11 @@ Behringers egna SysEx-kommandon (ur EQ-Design, avkodat 2026-09-03). Grafisk EQ, 
 layout är avkodade och verifierade mot hårdvara. Det här repot dokumenterar
 vad som fungerar, hur, och vad som fortfarande är okänt.
 
+**▶ [Öppna kontrollpanelen i webbläsaren](https://nicklasandersson.github.io/behringer-dsp-8000/)** – kräver bara Chrome eller
+Edge och ett MIDI-interface: 31-bands grafisk EQ, de parametriska filtren,
+avläsning av enhetens minne och kurvvisning, direkt via Web MIDI. Ingen
+installation, inget konto, inget som lämnar datorn.
+
 | | |
 |---|---|
 | **[Vad som fungerar](#vad-som-fungerar)** | CC-skalan, SysEx-dumpen, dump-layouten – kort version |
@@ -30,8 +35,10 @@ are decoded, so a patched dump can be pushed back to write both at once. The
 byte-level reference, the test log and what remains unknown are in
 [docs/midi.md](docs/midi.md). The repo also contains scripts that drive Room EQ
 Wizard's HTTP API to produce a room correction and push it to the unit
-([docs/rew.md](docs/rew.md), [docs/verktyg.md](docs/verktyg.md)). Everything
-except this summary is in Swedish.
+([docs/rew.md](docs/rew.md), [docs/verktyg.md](docs/verktyg.md)). A browser
+control panel – graphic EQ, parametric filters, memory readback and a response
+curve over Web MIDI – runs at **[https://nicklasandersson.github.io/behringer-dsp-8000/](https://nicklasandersson.github.io/behringer-dsp-8000/)**, no install needed (Chrome or
+Edge). Everything except this summary is in Swedish.
 
 **Auf Deutsch:** Dieses Repository dokumentiert die MIDI-Implementierung eines
 Behringer Ultra-Curve **DSP8000** (Originalmodell von 1996, nicht der DSP8024
