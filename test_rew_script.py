@@ -5,6 +5,7 @@ import base64
 import json
 import math
 import struct
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1068,6 +1069,57 @@ def test_run_gui_suggestions_and_measurements_endpoints():
 def test_dsp8000_selftest():
     subprocess.run([sys.executable, "dsp8000.py"], check=True,
                    cwd=Path(__file__).parent, capture_output=True)
+
+
+# dsp8000_gui.html bär en egen JS-kopia av SysEx-kodningen (Web MIDI, ingen
+# Python i webbläsaren). Det här låser den mot syx_tools så de inte glider isär.
+JS_HARNESS = """
+import fs from 'node:fs';
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const src = html.split('// --- kodning (DSP8000 SysEx, speglar syx_tools.py) ---')[1]
+                .split('// --- slut kodning ---')[0];
+const m = await import('data:text/javascript,' + encodeURIComponent(src
+  + '\\nexport {geqMessage, peqMessage, decodeDump};'));
+const d = m.decodeDump([...fs.readFileSync(process.argv[3])]);
+const geq = JSON.parse(process.argv[4]), peq = JSON.parse(process.argv[5]);
+console.log(JSON.stringify({
+  L: d.L, R: d.R, mL: d.mL, mR: d.mR, peq: d.peq,
+  geqMsg: m.geqMessage(geq, geq.map(v => -v), 1.5, -0.5),
+  peqMsg: m.peqMessage(peq),
+}));
+"""
+
+
+def test_gui_html_sysex_matches_syx_tools():
+    """JS-kodningen i dsp8000_gui.html ger samma byte som syx_tools, och avkodar
+    en riktig enhetsdump till samma GEQ/PEQ."""
+    if not shutil.which("node"):
+        return                      # node saknas: hoppa, resten av sviten räcker
+    here = Path(__file__).parent
+    dump_path = here / "dumps" / "dsp8000_sysex_peq_device.syx"
+    geq = [(-16 + i) / 2 for i in range(31)]
+    peq = [{"freq_hz": 96.15, "bw_oct": 1 / 3, "gain_db": -6.5},
+           {"freq_hz": 1000, "bw_oct": 1, "gain_db": 3},
+           None, None, None, {"freq_hz": 20000, "bw_oct": 2, "gain_db": -48}]
+    with tempfile.TemporaryDirectory() as td:
+        js = Path(td) / "h.mjs"
+        js.write_text(JS_HARNESS)
+        got = json.loads(subprocess.run(
+            [shutil.which("node"), str(js), str(here / "dsp8000_gui.html"), str(dump_path),
+             json.dumps(geq), json.dumps([p or {"gain_db": 0} for p in peq])],
+            check=True, capture_output=True, text=True).stdout)
+
+    assert got["geqMsg"] == list(syx_tools.geq_message(geq, [-v for v in geq], 1.5, -0.5))
+    assert got["peqMsg"] == list(syx_tools.peq_message(peq))
+
+    b = syx_tools.load(dump_path)
+    g = syx_tools.decode_geq(b)
+    assert got["L"] == g["L"] and got["R"] == g["R"]
+    assert got["mL"] == g["L_master"] * syx_tools.GEQ_DB_PER_UNIT
+    assert got["mR"] == g["R_master"] * syx_tools.GEQ_DB_PER_UNIT
+    for a, c in zip(got["peq"], syx_tools.decode_peq(b)):
+        assert a["on"] == c["on"] and a["gain_db"] == c["gain_db"]
+        assert math.isclose(a["freq_hz"], c["freq_hz"]) and math.isclose(a["bw_oct"], c["bw_oct"])
 
 
 if __name__ == "__main__":

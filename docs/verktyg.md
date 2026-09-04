@@ -158,18 +158,36 @@ ISO-banden, gain-gränserna, CC-mappningen, `db_to_cc` / `cc_to_db`,
 
 Fristående sida som pratar MIDI direkt från webbläsaren – behöver varken
 `run_gui.py` eller `.venv`. Kontrollpanelens direktredigeringsläge gör samma
-sak via servern; den här filen finns kvar för master/program och offline-bruk.
+sak via servern; den här filen finns kvar för master/program, avläsning och
+offline-bruk.
 
 Öppna i **Chrome/Edge** (Web MIDI). Blockeras `file://`:
 `python3 -m http.server` → `http://localhost:8000/dsp8000_gui.html`.
 
-- 31-bands GEQ ±16 dB, läge Länkad / Endast L / Endast R
-- **"Skicka alla"** återsänder alla band (drag-events tappas ibland)
-- masterfaders L/R (0–127 rått), programval (Program Change 0–99)
-- MIDI-kanal + Controller offset (= enhetens `CNTL RCV`)
-- "Ladda REW-JSON" drar in band + PEQ-tabell att ställa för hand
+- 31-bands GEQ ±16 dB, läge Länkad / Endast L / Endast R. Under draget går
+  varje band som CC (live); **"Skriv GEQ + PEQ"** skickar hela kurvan atomärt
+  som SysEx `21` + de sex parametriska filtren som `22` (midi.md 6.8) – inget
+  knapptryck på enheten, inget utanför arbetsbufferten rörs
+- **PEQ-tabell**: 6 rader (L1 R1 L2 R2 L3 R3) med frekvens, bandbredd i oktaver
+  och gain. Gain 0 = filtret stängs av. Q visas beräknat. Ställ Feedback
+  Destroyer på OFF först – annars flyttar den filtren själv
+- **"Hämta från enheten"**: SysEx-förfrågan `70 01` → hela minnesdumpen avkodas
+  i webbläsaren (samma bitfält som `syx_tools.py`) och fyller reglagen,
+  masterfaders och kolumnen "På enheten". Kräver `EXCL SND/RCV` ON och båda
+  kablarna i
+- **Kurvan**: GEQ interpolerad i log-frekvens plus de parametriska filtrens
+  magnitud, L och R var för sig. Heldragen = det du redigerar, streckad = det
+  som senast hämtades från enheten
+- masterfaders L/R i dB (SysEx `21` skriver alltid master), programval
+  (Program Change 0–99)
+- MIDI-kanal (= SysEx device-ID) + Controller offset (= enhetens `CNTL RCV`)
+- "REW-JSON" drar in banden och lägger de 3 starkaste filtren på både L och R
 
-Reglagen sparas i `localStorage`; tryck "Skicka alla" efter omladdning.
+Reglagen sparas i `localStorage`; tryck "Skriv GEQ + PEQ" efter omladdning.
+
+`#selftest` i URL:en kör sidans egen kontroll av SysEx-kodningen. Samma
+kodning låses mot `syx_tools.py` av `test_gui_html_sysex_matches_syx_tools`
+(kör JS-blocket i `node`, hoppas över om `node` saknas).
 
 ---
 
@@ -204,7 +222,7 @@ att spara: döp om och flytta till `dumps/`.
 | `rew_to_dsp8000.py` | skriva till och läsa ur enheten via MIDI |
 | `dsp8000.py` | modell av enheten: band, gränser, CC-mappning |
 | `syx_tools.py` | avkoda/diffa/patcha `.syx`-dumpar (ren stdlib) |
-| `dsp8000_gui.html` | fristående manuell GEQ-kontroll via Web MIDI |
+| `dsp8000_gui.html` | fristående GEQ + PEQ-kontroll och avläsning via Web MIDI |
 | `paths.py` | var genererade filer hamnar |
 | `test_rew_script.py` | självtester utan REW/enhet (`./run.sh test`) |
 

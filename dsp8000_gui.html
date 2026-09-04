@@ -2,17 +2,17 @@
 <meta charset="utf-8">
 <title>DSP8000 kontroll</title>
 <!--
-  Manuell kontroll av DSP8000:s grafiska EQ via Web MIDI (Chrome/Edge).
+  Manuell kontroll av DSP8000 via Web MIDI (Chrome/Edge).
   Öppna filen direkt, eller om Web MIDI blockeras från file://:
       python3 -m http.server   ->  http://localhost:8000/dsp8000_gui.html
 
-  Styr det som faktiskt går att skriva via MIDI: 31-bands GEQ (L/R),
-  masterfaders, programval. PEQ/delay/gate/limiter/feedback destroyer går inte
-  att skriva via MIDI - ställ på enheten, spara som program, hämta här.
-  MIDI-referens: docs/midi.md.
+  Skriver 31-bands GEQ (SysEx 21) och de 6 parametriska filtren (SysEx 22)
+  direkt till arbetsbufferten - inget knapptryck på enheten. Läser tillbaka
+  hela minnesdumpen (SysEx-förfrågan 70 01) och ritar kurvan.
+  Protokollet: docs/midi.md 6.8.  Självtest: lägg till #selftest i URL:en.
 -->
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: light dark; --l: #3a7bd5; --r: #e08a3c; }
   body { font: 13px system-ui, sans-serif; margin: 1rem; }
   h1 { font-size: 1rem; }
   #bar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
@@ -20,6 +20,11 @@
   #bar label { display: flex; gap: .3rem; align-items: center; }
   select, input[type=number] { font: inherit; padding: .15rem .3rem; }
   #status { margin-left: auto; opacity: .7; }
+  #graph { width: 100%; max-width: 1000px; height: 200px; display: block;
+           border: 1px solid #8884; border-radius: 3px; }
+  #legend { display: flex; gap: 1rem; margin: .3rem 0 1rem; opacity: .8; }
+  #legend i { display: inline-block; width: 1.4rem; border-top: 2px solid;
+              vertical-align: middle; margin-right: .3rem; font-style: normal; }
   #eq { display: flex; gap: 2px; align-items: flex-end; overflow-x: auto;
         padding-bottom: .5rem; }
   .band { display: flex; flex-direction: column; align-items: center;
@@ -30,7 +35,6 @@
   .sliders { display: flex; gap: 1px; }
   input[type=range][orient] { writing-mode: vertical-lr; direction: rtl;
         width: 14px; height: 150px; }
-  .band.wide input[type=range] { width: 20px; }
   #master { display: flex; gap: 1.5rem; margin: 1rem 0; }
   .mfad { display: flex; flex-direction: column; align-items: center; }
   #prog button, #bar button { font: inherit; padding: .2rem .5rem; }
@@ -38,27 +42,38 @@
   .warn { color: #b45; }
   h2 { font-size: .95rem; margin: 1.5rem 0 .3rem; }
   #peq { border-collapse: collapse; }
-  #peq th, #peq td { border: 1px solid #8884; padding: .2rem .6rem; text-align: left;
-                     font-variant-numeric: tabular-nums; }
+  #peq th, #peq td { border: 1px solid #8884; padding: .2rem .5rem; text-align: left; }
+  #peq input { font: inherit; width: 5.5rem; padding: .1rem .2rem;
+               font-variant-numeric: tabular-nums; }
+  #peq td.dev { opacity: .7; font-variant-numeric: tabular-nums; }
 </style>
 
-<h1>DSP8000 – grafisk EQ via MIDI</h1>
+<h1>DSP8000 – grafisk EQ + parametriska filter via MIDI</h1>
 
 <div id="bar">
-  <label>Utport <select id="port"></select></label>
-  <label>MIDI-kanal <input id="ch" type="number" min="1" max="16" value="1"></label>
-  <label>Controller offset <input id="offset" type="number" min="0" max="64" value="0"></label>
-  <label>Kanal
+  <label>Ut <select id="port"></select></label>
+  <label>In <select id="inport"></select></label>
+  <label>Kanal <input id="ch" type="number" min="1" max="16" value="1"></label>
+  <label>CC-offset <input id="offset" type="number" min="0" max="64" value="0"></label>
+  <label>GEQ-kanal
     <select id="mode">
       <option value="link">Länkad (L+R)</option>
       <option value="L">Endast L</option>
       <option value="R">Endast R</option>
     </select>
   </label>
-  <button id="sendall">Skicka alla</button>
+  <button id="sendall">Skriv GEQ + PEQ</button>
+  <button id="fetch">Hämta från enheten</button>
   <button id="zero">Nolla alla band</button>
-  <label>Ladda REW-JSON <input id="file" type="file" accept=".json"></label>
+  <label>REW-JSON <input id="file" type="file" accept=".json"></label>
   <span id="status">ingen MIDI</span>
+</div>
+
+<canvas id="graph" width="1000" height="200"></canvas>
+<div id="legend">
+  <span><i style="color:var(--l)"></i>vänster (redigeras)</span>
+  <span><i style="color:var(--r)"></i>höger (redigeras)</span>
+  <span><i style="border-top-style:dashed;opacity:.8"></i>enheten (hämtad)</span>
 </div>
 
 <div id="eq"></div>
@@ -66,202 +81,428 @@
 <div id="master">
   <div class="mfad">
     <input id="mL" type="range" orient min="0" max="127" value="64">
-    <span>Master L <b id="mLv">64</b></span>
+    <span>Master L <b id="mLv">0.0</b> dB</span>
   </div>
   <div class="mfad">
     <input id="mR" type="range" orient min="0" max="127" value="64">
-    <span>Master R <b id="mRv">64</b></span>
+    <span>Master R <b id="mRv">0.0</b> dB</span>
   </div>
-  <span class="note">Masterfader: 0–127 rått, 64 = mitten. Manualen anger −16…+16 dB
-    i 0,5 dB-steg, så troligen samma skala som banden (CC = 64 + dB×4) – ej verifierat.</span>
+  <span class="note">Masterfader −16…+16 dB i 0,25 dB-steg (CC = 64 + dB×4).
+    SysEx 21 skriver <b>alltid</b> master – den här nivån följer med varje
+    "Skriv GEQ + PEQ".</span>
 </div>
 
 <div id="prog">
   Program <input id="progn" type="number" min="0" max="99" value="0">
-  <button id="progget">Hämta program</button>
-  <span class="note">Byter minnesplats på enheten (Program Change).</span>
+  <button id="progget">Byt program</button>
+  <span class="note">Byter minnesplats på enheten (Program Change). Hämta
+    efteråt för att se vad som ligger där.</span>
 </div>
 
-<h2>Parametriska filter — ställ in för hand</h2>
-<p class="note">Går <b>inte</b> via MIDI. Ladda REW-JSON ovan så fylls tabellen.
-  Stereolink påverkar inte PEQ → ställ in på <b>både L och R</b>.</p>
+<h2>Parametriska filter (SysEx 22)</h2>
+<p class="note">Skrivs direkt till arbetsbufferten, samma knapp som GEQ.
+  Bandbredd i oktaver (enheten: 1/60–120/60 okt), gain +16…−48 dB i 0,5 dB-steg.
+  <b>Gain 0 = filtret stängs av.</b> De 3 filtren per kanal delas med Feedback
+  Destroyer – ställ FB-D på OFF, annars flyttar den filtren själv.</p>
 <table id="peq">
-  <tr><th>#</th><th>Frekvens</th><th>Gain</th><th>Q</th><th>≈ bandbredd</th></tr>
-  <tr><td colspan="5" class="note">ingen JSON laddad</td></tr>
+  <tr><th>Filter</th><th>Frekvens (Hz)</th><th>Bandbredd (okt)</th>
+      <th>Gain (dB)</th><th>Q</th><th>På enheten</th></tr>
 </table>
-<p class="note">
-  På DSP8000: <b>PEQ</b>-sidan → välj filter 1/2/3 → sätt <b>frekvens</b>,
-  <b>bandbredd</b> (oktav) och <b>gain</b> (0,5 dB-steg, +16…−48 dB).
-  De 3 filtren delas med Feedback Destroyer. Spara som program när klart.
-</p>
 
 <p class="note">
-  <b>Går inte via MIDI heller:</b> delay, gate, limiter, feedback destroyer,
-  Auto-Q, stereolink. Ställ på enheten, spara program, hämta via programval.
-  <br>Vad enheten faktiskt tog emot läses tillbaka med
-  <code>rew_to_dsp8000.py readback</code> (GEQ + PEQ ur minnesdumpen, se
-  docs/midi.md). Det <b>akustiska</b> resultatet verifieras med en REW-sweep.
+  <b>Går inte via MIDI:</b> delay, gate, limiter, feedback destroyer, Auto-Q,
+  stereolink, programsparande. Ställ på enheten och spara program där.
+  <br>"Hämta från enheten" läser hela minnesdumpen (12 kB, tar ~5 s) och fyller
+  reglagen + kolumnen "På enheten". Kräver att enhetens <code>EXCL SND/RCV</code>
+  står på ON och att båda MIDI-kablarna sitter i.
+  <br><b>GEQ-kanal Endast L/R:</b> SysEx 21 skriver alltid båda kanalerna, så den
+  andra kanalen får det som senast hämtades från enheten – 0 dB om inget hämtats.
+  Hämta först om du bara vill röra en kanal.
+  <br>Det <b>akustiska</b> resultatet verifieras med en REW-sweep.
 </p>
 
 <script>
-const BANDS = [20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,
+// --- kodning (DSP8000 SysEx, speglar syx_tools.py) ---
+const ISO = [20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,
   1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
 
+// GEQ: dB*2 + 32 (0–64, 32 = 0 dB), 31 band + master per kanal, opackat.
+const geqVal = db => Math.max(0, Math.min(64, Math.round(db * 2) + 32));
+const geqMessage = (L, R, mL = 0, mR = 0, prog = 0) =>
+  [0x21, prog, ...L.map(geqVal), geqVal(mL), ...R.map(geqVal), geqVal(mR)];
+
+// 7 byte -> 8 databyte < 128, MSB först (EQ-Design 0x403f70).
+function pack7(data) {
+  const d = [...data];
+  while (d.length % 7) d.push(0);
+  const bits = d.map(x => x.toString(2).padStart(8, '0')).join('');
+  const out = [];
+  for (let i = 0; i < bits.length; i += 7) out.push(parseInt(bits.slice(i, i + 7), 2));
+  return out;
+}
+
+// PEQ-frekvens: [ISO-bandindex][finsteg i 1/20 av avståndet till nästa band].
+function peqFreqRaw(hz) {
+  const f = Math.min(Math.max(hz, ISO[0]), ISO[30]);
+  let band = 0;
+  for (let i = 0; i < 31; i++) if (ISO[i] <= f) band = i;
+  if (band >= 30) return 30 << 8;
+  let fine = Math.round((f - ISO[band]) / (ISO[band + 1] - ISO[band]) * 20);
+  if (fine >= 20) { band++; fine = 0; }
+  return band >= 30 ? 30 << 8 : (band << 8) | fine;
+}
+function peqFreqHz(raw) {
+  const band = Math.min(raw >> 8, 30), fine = raw & 0xFF;
+  return band >= 30 ? ISO[30] : ISO[band] + (ISO[band + 1] - ISO[band]) * fine / 20;
+}
+
+// 6 poster i ordning L1 R1 L2 R2 L3 R3; null (eller gain 0) = OFF/noll.
+function peqMessage(peqs) {
+  const recs = [];
+  for (const p of peqs) {
+    if (!p || !p.gain_db) { recs.push(0, 0, 0, 0); continue; }
+    const fr = peqFreqRaw(p.freq_hz);
+    recs.push(fr >> 8, fr & 0xFF,
+      Math.max(0, Math.min(119, Math.round(p.bw_oct * 60) - 1)),
+      Math.max(-96, Math.min(32, Math.round(p.gain_db * 2))) & 0xFF);
+  }
+  return [0x22, 0x00, ...pack7([...recs, 0, 0, 0, 0])];
+}
+
+// Avkoda minnesdumpen (F0 00 20 32 dd 01 4F <12104 packade byte> F7).
+// Bitströmmen räknas från fil-offset 11, 7 bitar per byte, MSB först.
+const bitAt = (d, p) => (d[(p / 7) | 0] >> (6 - p % 7)) & 1;
+const readU = (d, p, w) => { let v = 0; for (let i = 0; i < w; i++) v = v << 1 | bitAt(d, p + i); return v; };
+const s8 = v => v >= 128 ? v - 256 : v;
+function decodeDump(msg) {
+  const d = msg.slice(11, msg.length - 1);          // hoppa F0 + 10 headerbyte
+  const g = [];
+  for (let n = 0; n < 64; n++) g.push(s8(readU(d, 372 + 8 * n, 8)) * 0.5);
+  const peq = [];
+  for (let k = 0; k < 6; k++) {
+    const b = 84 + 32 * k;
+    const [hi, lo, bw, gn] = [0, 1, 2, 3].map(i => readU(d, b + 8 * i, 8));
+    peq.push({ freq_hz: peqFreqHz(hi << 8 | lo), bw_oct: (bw + 1) / 60,
+               gain_db: s8(gn) / 2, on: !!(hi | lo | bw | gn) });
+  }
+  return { L: g.slice(0, 31), mL: g[31], R: g.slice(32, 63), mR: g[63], peq };
+}
+
+// Peaking-filtrets magnitud i dB (analog RBJ). Bandbredd i oktaver -> Q.
+function peakDb(f, f0, bwOct, gainDb) {
+  if (!gainDb || !f0) return 0;
+  const A = Math.pow(10, gainDb / 40);
+  const Q = 1 / (2 * Math.sinh(Math.LN2 / 2 * Math.max(bwOct, 1 / 60)));
+  const x = f / f0, d = 1 - x * x;
+  return 20 * Math.log10(Math.hypot(d, A * x / Q) / Math.hypot(d, x / (A * Q)));
+}
+
+// GEQ-kurva: linjär interpolation mellan bandmitterna i log-frekvens.
+function geqDbAt(f, bands) {
+  if (f <= ISO[0]) return bands[0];
+  if (f >= ISO[30]) return bands[30];
+  let i = 0;
+  while (ISO[i + 1] < f) i++;
+  const t = Math.log(f / ISO[i]) / Math.log(ISO[i + 1] / ISO[i]);
+  return bands[i] + (bands[i + 1] - bands[i]) * t;
+}
+const qToOct = q => Math.asinh(1 / (2 * q)) * 2 / Math.LN2;
+const octToQ = o => 1 / (2 * Math.sinh(Math.LN2 / 2 * o));
+// --- slut kodning ---
+
 const $ = id => document.getElementById(id);
-let out = null;
+let out = null, inp = null, device = null;   // device = senaste hämtade dumpen
 
-// dB -> CC-värde. Verifierat mot enheten: CC 64 = 0 dB, CC 96 = +8 dB.
 const dbToCc = db => Math.max(0, Math.min(127, Math.round(64 + db * 4)));
+const ccToDb = cc => (cc - 64) / 4;
 const ccBand = (i, chan) => (+$('offset').value) + (chan === 'R' ? 32 : 0) + i;
-const ccMaster = chan => (+$('offset').value) + (chan === 'R' ? 63 : 31);
-
 const midiCh = () => Math.max(0, Math.min(15, ($('ch').value | 0) - 1));
-function sendCC(cc, val, when) {
-  if (!out) return;
-  const msg = [0xB0 | midiCh(), cc & 127, val & 127];
-  when ? out.send(msg, when) : out.send(msg);
+
+function sendCC(cc, val) {
+  if (out) out.send([0xB0 | midiCh(), cc & 127, val & 127]);
 }
-function sendBand(i, db, when) {
-  const m = $('mode').value, v = dbToCc(db);
-  if (m === 'link' || m === 'L') sendCC(ccBand(i, 'L'), v, when);
-  if (m === 'link' || m === 'R') sendCC(ccBand(i, 'R'), v, when);
+function sendSysex(payload) {
+  if (!out) { flash('ingen utport'); return false; }
+  out.send([0xF0, 0x00, 0x20, 0x32, midiCh(), 0x01, ...payload, 0xF7]);
+  return true;
+}
+function flash(msg) {
+  $('status').textContent = msg;
+  setTimeout(() => { $('status').textContent = out ? 'MIDI: ' + out.name : 'ingen utport'; }, 2500);
 }
 
-// Bygg 31 band
-const eq = $('eq');
-BANDS.forEach((hz, i) => {
+// --- reglagen -> värden ---
+const bandDb = () => ISO.map((_, i) => +$('s' + i).value);
+function channels() {
+  const m = $('mode').value, b = bandDb();
+  // Endast L/R: den andra kanalen får det enheten redan har (0 dB om inget hämtats),
+  // annars skulle SysEx 21 nolla den - 21 skriver alltid båda kanalerna.
+  const keep = ch => device ? device[ch] : ISO.map(() => 0);
+  return { L: m === 'R' ? keep('L') : b, R: m === 'L' ? keep('R') : b };
+}
+const PEQ_LABELS = ['L1', 'R1', 'L2', 'R2', 'L3', 'R3'];
+const peqRows = () => PEQ_LABELS.map((_, k) => ({
+  freq_hz: +$('pf' + k).value || 0,
+  bw_oct: +$('pb' + k).value || 1,
+  gain_db: +$('pg' + k).value || 0,
+}));
+
+// --- bygg 31 band ---
+ISO.forEach((hz, i) => {
   const b = document.createElement('div');
   b.className = 'band';
   b.innerHTML = `<span class="db" id="d${i}">0.0</span>
     <div class="sliders">
       <input type="range" orient min="-16" max="16" step="0.5" value="0" id="s${i}">
     </div>
-    <span class="hz">${hz >= 1000 ? (hz/1000)+'k' : hz} Hz</span>`;
-  eq.appendChild(b);
-  const s = $('s'+i);
-  const push = () => { $('d'+i).textContent = (+s.value).toFixed(1); sendBand(i, +s.value); };
+    <span class="hz">${hz >= 1000 ? (hz / 1000) + 'k' : hz} Hz</span>`;
+  $('eq').appendChild(b);
+  const s = $('s' + i);
+  const push = () => {
+    $('d' + i).textContent = (+s.value).toFixed(1);
+    const m = $('mode').value, v = dbToCc(+s.value);
+    if (m !== 'R') sendCC(ccBand(i, 'L'), v);   // live under draget, per band
+    if (m !== 'L') sendCC(ccBand(i, 'R'), v);
+    draw();
+  };
   s.addEventListener('input', push);
   s.addEventListener('change', push);   // slutvärdet landar även om drag-events tappas
 });
 
+// --- bygg PEQ-tabellen ---
+PEQ_LABELS.forEach((lab, k) => {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${lab}</td>
+    <td><input id="pf${k}" type="number" min="20" max="20000" step="1" value="1000"></td>
+    <td><input id="pb${k}" type="number" min="0.02" max="2" step="0.05" value="1"></td>
+    <td><input id="pg${k}" type="number" min="-48" max="16" step="0.5" value="0"></td>
+    <td id="pq${k}" class="dev"></td><td id="pd${k}" class="dev">–</td>`;
+  $('peq').appendChild(tr);
+  for (const p of ['pf', 'pb', 'pg'])
+    $(p + k).addEventListener('input', () => { showQ(k); draw(); });
+  showQ(k);
+});
+function showQ(k) { $('pq' + k).textContent = octToQ(+$('pb' + k).value || 1).toFixed(2); }
+function setPeqRow(k, f) {
+  $('pf' + k).value = Math.round(f.freq_hz);
+  $('pb' + k).value = (+f.bw_oct).toFixed(2);
+  $('pg' + k).value = (+f.gain_db).toFixed(1);
+  showQ(k);
+}
+
+// --- skriva ---
 function sendAll() {
-  // schemalägg 3 ms isär så enhetens MIDI-buffert inte svämmar över
-  let t = performance.now();
-  BANDS.forEach((_, i) => { sendBand(i, +$('s'+i).value, t); t += 3; });
-  sendCC(ccMaster('L'), +$('mL').value, t); t += 3;
-  sendCC(ccMaster('R'), +$('mR').value, t);
-  $('status').textContent = 'skickade alla ' + (BANDS.length) + ' band';
-  setTimeout(() => out && ($('status').textContent = 'MIDI: ' + out.name), 900);
+  const c = channels(), mL = ccToDb(+$('mL').value), mR = ccToDb(+$('mR').value);
+  if (!sendSysex(geqMessage(c.L, c.R, mL, mR))) return;
+  sendSysex(peqMessage(peqRows()));
+  flash('skrev GEQ (21) + PEQ (22)');
+  save();
 }
 $('sendall').onclick = sendAll;
 
 $('zero').onclick = () => {
-  BANDS.forEach((_, i) => { $('s'+i).value = 0; $('d'+i).textContent = '0.0'; });
-  sendAll();   // schemalagt med mellanrum - 62 CC i en klump tappas av enheten
-  save();
+  ISO.forEach((_, i) => { $('s' + i).value = 0; $('d' + i).textContent = '0.0'; });
+  sendAll();
+  draw();
 };
 
-$('mL').addEventListener('input', e => {
-  $('mLv').textContent = e.target.value; sendCC(ccMaster('L'), +e.target.value);
-});
-$('mR').addEventListener('input', e => {
-  $('mRv').textContent = e.target.value; sendCC(ccMaster('R'), +e.target.value);
-});
-
-$('progget').onclick = () => {
-  if (!out) return;
-  out.send([0xC0 | midiCh(), Math.max(0, Math.min(99, +$('progn').value))]);
-};
-
-// Q -> bandbredd i oktaver (DSP8000 anger PEQ-bandbredd i oktaver, REW i Q)
-const qToOct = q => Math.asinh(1 / (2 * q)) * 2 / Math.LN2;
-
-function showPeq(filters) {
-  const rows = (filters || [])
-    .slice().sort((a, b) => Math.abs(b.gaindB || 0) - Math.abs(a.gaindB || 0))
-    .slice(0, 3);
-  const t = $('peq');
-  t.innerHTML = '<tr><th>#</th><th>Frekvens</th><th>Gain</th><th>Q</th>'
-    + '<th>≈ bandbredd</th></tr>' + (rows.length
-    ? rows.map((f, i) => `<tr><td>${i+1}</td><td>${(f.frequency||0).toFixed(0)} Hz</td>`
-        + `<td>${(f.gaindB||0).toFixed(1)} dB</td><td>${(f.q||0).toFixed(2)}</td>`
-        + `<td>${qToOct(f.q||1).toFixed(2)} okt</td></tr>`).join('')
-    : '<tr><td colspan="5" class="note">inga parametriska filter i JSON:en</td></tr>');
+for (const ch of ['L', 'R']) {
+  $('m' + ch).addEventListener('input', e => {
+    $('m' + ch + 'v').textContent = ccToDb(+e.target.value).toFixed(2);
+    sendCC((+$('offset').value) + (ch === 'R' ? 63 : 31), +e.target.value);
+  });
 }
 
-// Ladda rew_eq_suggestion.json: grafiska band + parametriska filter
+$('progget').onclick = () => {
+  if (out) out.send([0xC0 | midiCh(), Math.max(0, Math.min(99, +$('progn').value))]);
+};
+
+// --- hämta ---
+let fetchTimer = null;
+$('fetch').onclick = () => {
+  if (!inp) { flash('ingen inport vald'); return; }
+  if (!sendSysex([0x70, 0x01])) return;
+  $('status').textContent = 'hämtar dump (~5 s)…';
+  clearTimeout(fetchTimer);
+  fetchTimer = setTimeout(() => {
+    $('status').textContent = 'inget svar – EXCL SND/RCV ON, båda kablarna i, EQ-skärmen?';
+    $('status').className = 'warn';
+  }, 12000);
+};
+
+function onDump(bytes) {
+  clearTimeout(fetchTimer);
+  $('status').className = '';
+  device = decodeDump(bytes);
+  const src = $('mode').value === 'R' ? device.R : device.L;
+  src.forEach((db, i) => { $('s' + i).value = db; $('d' + i).textContent = db.toFixed(1); });
+  $('mL').value = dbToCc(device.mL); $('mLv').textContent = device.mL.toFixed(2);
+  $('mR').value = dbToCc(device.mR); $('mRv').textContent = device.mR.toFixed(2);
+  device.peq.forEach((f, k) => {
+    $('pd' + k).textContent = f.on
+      ? `${f.freq_hz.toFixed(0)} Hz / ${f.bw_oct.toFixed(2)} okt / ${f.gain_db.toFixed(1)} dB`
+      : 'OFF';
+    if (f.on) setPeqRow(k, f);
+  });
+  const diff = device.L.some((v, i) => v !== device.R[i]);
+  flash('hämtade dumpen' + (diff ? ' – L och R skiljer sig, reglagen visar '
+    + ($('mode').value === 'R' ? 'R' : 'L') : ''));
+  draw();
+  save();
+}
+
+// --- kurvan ---
+const g = $('graph').getContext('2d');
+const DB_MAX = 18;
+function draw() {
+  const w = $('graph').width, h = $('graph').height;
+  const x = f => Math.log10(f / 20) / 3 * w;
+  const y = db => h / 2 - db / DB_MAX * (h / 2 - 6);
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = '#8884'; g.fillStyle = '#8888'; g.lineWidth = 1;
+  g.font = '10px system-ui, sans-serif';
+  for (const f of [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]) {
+    g.beginPath(); g.moveTo(x(f), 0); g.lineTo(x(f), h); g.stroke();
+    g.fillText(f >= 1000 ? f / 1000 + 'k' : f, x(f) + 2, h - 3);
+  }
+  for (const db of [-12, -6, 0, 6, 12]) {
+    g.beginPath(); g.moveTo(0, y(db)); g.lineTo(w, y(db)); g.stroke();
+    if (db) g.fillText((db > 0 ? '+' : '') + db, 2, y(db) - 2);
+  }
+  g.strokeStyle = '#888'; g.beginPath(); g.moveTo(0, y(0)); g.lineTo(w, y(0)); g.stroke();
+
+  const peq = peqRows();
+  const curve = (bands, filters, color, dashed) => {
+    g.strokeStyle = color; g.lineWidth = dashed ? 1.5 : 2;
+    g.setLineDash(dashed ? [4, 4] : []);
+    g.beginPath();
+    for (let px = 0; px <= w; px++) {
+      const f = 20 * Math.pow(10, px / w * 3);
+      let db = geqDbAt(f, bands);
+      for (const p of filters) db += peakDb(f, p.freq_hz, p.bw_oct, p.gain_db);
+      px ? g.lineTo(px, y(db)) : g.moveTo(px, y(db));
+    }
+    g.stroke(); g.setLineDash([]);
+  };
+  if (device) {
+    curve(device.L, device.peq.filter((f, k) => f.on && k % 2 === 0), '#3a7bd5', true);
+    curve(device.R, device.peq.filter((f, k) => f.on && k % 2 === 1), '#e08a3c', true);
+  }
+  const c = channels();
+  curve(c.L, peq.filter((_, k) => k % 2 === 0), '#3a7bd5');
+  curve(c.R, peq.filter((_, k) => k % 2 === 1), '#e08a3c');
+}
+
+// --- REW-JSON ---
 $('file').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
   const data = JSON.parse(await f.text());
-  const g = data.graphic_band_gains_db || {};
-  BANDS.forEach((hz, i) => {
-    if (g[hz] == null) return;
-    const db = Math.max(-16, Math.min(16, g[hz]));
-    $('s'+i).value = db; $('d'+i).textContent = db.toFixed(1);
+  const gb = data.graphic_band_gains_db || {};
+  ISO.forEach((hz, i) => {
+    if (gb[hz] == null) return;
+    const db = Math.max(-16, Math.min(16, gb[hz]));
+    $('s' + i).value = db; $('d' + i).textContent = db.toFixed(1);
   });
-  sendAll();   // med mellanrum, inte 62 CC i en klump
-  peqCache = data.peq_filters || [];
-  showPeq(peqCache);
-  save();
+  // 3 starkaste filtren, samma på L och R (enheten länkar inte PEQ)
+  const top = (data.peq_filters || []).slice()
+    .sort((a, b) => Math.abs(b.gaindB || 0) - Math.abs(a.gaindB || 0)).slice(0, 3);
+  PEQ_LABELS.forEach((_, k) => {
+    const f = top[k >> 1];
+    setPeqRow(k, f
+      ? { freq_hz: f.frequency || 1000, bw_oct: qToOct(f.q || 1), gain_db: f.gaindB || 0 }
+      : { freq_hz: 1000, bw_oct: 1, gain_db: 0 });
+  });
+  flash(`laddade ${f.name} – tryck "Skriv GEQ + PEQ"`);
+  draw(); save();
   e.target.value = '';   // så samma fil kan laddas om
 });
 
-// Spara/återställ UI-tillstånd (localStorage) - överlever refresh, skickar inget
+// --- localStorage: överlever refresh, skickar inget ---
 const KEY = 'dsp8000_gui';
-let peqCache = [];
 function save() {
   try {
     localStorage.setItem(KEY, JSON.stringify({
-      bands: BANDS.map((_, i) => +$('s'+i).value),
+      bands: bandDb(), peq: peqRows(),
       mL: +$('mL').value, mR: +$('mR').value, mode: $('mode').value,
       ch: $('ch').value, offset: $('offset').value, progn: $('progn').value,
-      peq: peqCache,
     }));
   } catch (e) {}
 }
 function restore() {
   let st; try { st = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
-  if (!st) return;
-  (st.bands || []).forEach((v, i) => {
-    if (!$('s'+i)) return;
-    $('s'+i).value = v; $('d'+i).textContent = (+v).toFixed(1);
-  });
-  if (st.mL != null) { $('mL').value = st.mL; $('mLv').textContent = st.mL; }
-  if (st.mR != null) { $('mR').value = st.mR; $('mRv').textContent = st.mR; }
-  for (const k of ['mode', 'ch', 'offset', 'progn'])
-    if (st[k] != null) $(k).value = st[k];
-  peqCache = st.peq || [];   // annars skrivs PEQ-listan över med [] vid nästa save()
-  if (peqCache.length) showPeq(peqCache);
+  if (st) {
+    (st.bands || []).forEach((v, i) => {
+      if (!$('s' + i)) return;
+      $('s' + i).value = v; $('d' + i).textContent = (+v).toFixed(1);
+    });
+    (st.peq || []).forEach((f, k) => $('pf' + k) && setPeqRow(k, f));
+    for (const k of ['mL', 'mR', 'mode', 'ch', 'offset', 'progn'])
+      if (st[k] != null) $(k).value = st[k];
+  }
+  for (const ch of ['L', 'R']) $('m' + ch + 'v').textContent = ccToDb(+$('m' + ch).value).toFixed(2);
+  draw();
 }
 document.addEventListener('change', save);
 restore();
 
-// Web MIDI
-if (!navigator.requestMIDIAccess) {
+// --- Web MIDI ---
+if (location.hash === '#selftest') selftest();
+else if (!navigator.requestMIDIAccess) {
   $('status').textContent = 'Web MIDI stöds inte – använd Chrome/Edge';
   $('status').className = 'warn';
 } else {
-  navigator.requestMIDIAccess().then(access => {
+  navigator.requestMIDIAccess({ sysex: true }).then(access => {
+    const prefer = list => Math.max(0, list.findIndex(o => /audiobox/i.test(o.name)));
     const fill = () => {
-      const outs = [...access.outputs.values()];
-      $('port').innerHTML = outs.map((o, i) =>
-        `<option value="${i}">${o.name}</option>`).join('');
+      const outs = [...access.outputs.values()], ins = [...access.inputs.values()];
+      const opts = l => l.map((o, i) => `<option value="${i}">${o.name}</option>`).join('');
+      $('port').innerHTML = opts(outs);
+      $('inport').innerHTML = opts(ins) || '<option>(ingen)</option>';
+      $('port').value = prefer(outs);
+      $('inport').value = prefer(ins);
       const pick = () => {
         out = outs[$('port').value | 0] || null;
+        ins.forEach(p => p.onmidimessage = null);
+        inp = ins[$('inport').value | 0] || null;
+        if (inp) inp.onmidimessage = e => {
+          // dumpen är 12112 byte; fader-frames och annat småplock ignoreras
+          if (e.data[0] === 0xF0 && e.data.length > 1000) onDump(e.data);
+        };
         $('status').textContent = out ? 'MIDI: ' + out.name : 'ingen utport';
         $('status').className = out ? '' : 'warn';
       };
       $('port').onchange = pick;
-      // föredra AudioBox om den finns
-      const ab = outs.findIndex(o => /audiobox/i.test(o.name));
-      if (ab >= 0) $('port').value = ab;
+      $('inport').onchange = pick;
       pick();
     };
     fill();
     access.onstatechange = fill;
   }, () => {
-    $('status').textContent = 'MIDI nekades';
+    $('status').textContent = 'MIDI nekades (SysEx kräver https:// eller localhost)';
     $('status').className = 'warn';
   });
+}
+
+// Självtest av kodningen mot kända värden ur syx_tools.py / docs/midi.md 6.8.
+function selftest() {
+  const bad = [];
+  const ok = (name, got, want) => { if (JSON.stringify(got) !== JSON.stringify(want))
+    bad.push(`${name}: fick ${JSON.stringify(got)}, ville ${JSON.stringify(want)}`); };
+  ok('geqVal 0 dB', geqVal(0), 32);
+  ok('geqVal +16 dB', geqVal(16), 64);
+  ok('geqVal -16 dB', geqVal(-16), 0);
+  ok('geqMessage längd', geqMessage(ISO.map(() => 0), ISO.map(() => 0)).length, 66);
+  ok('pack7', pack7([0xFF, 0x00, 0x80, 0, 0, 0, 0]), [127, 64, 16, 0, 0, 0, 0, 0]);
+  ok('peqFreqRaw 1 kHz', peqFreqRaw(1000), 17 << 8);
+  ok('peqFreqRaw 20 kHz', peqFreqRaw(20000), 30 << 8);
+  ok('peqFreqHz 0x0527', +peqFreqHz(0x0527).toFixed(3), 96.150);   // enhetens display
+  ok('peq roundtrip 250 Hz', peqFreqHz(peqFreqRaw(250)), 250);
+  ok('peqMessage längd', peqMessage(PEQ_LABELS.map(() => null)).length, 34);
+  ok('peqMessage OFF', peqMessage(PEQ_LABELS.map(() => null)).slice(2).every(v => v === 0), true);
+  ok('peakDb i mitten', +peakDb(1000, 1000, 1, -6).toFixed(6), -6);
+  ok('qToOct/octToQ', +octToQ(qToOct(1.41)).toFixed(6), 1.41);
+  $('status').className = bad.length ? 'warn' : '';
+  $('status').textContent = bad.length ? bad.join(' | ') : 'självtest OK';
+  document.title = bad.length ? 'SJÄLVTEST FEL' : 'självtest OK';
 }
 </script>
