@@ -195,11 +195,43 @@ def test_save_and_load_roundtrip():
         gains[20] = 3.0
         r.save_output({"id": "1"}, [{"type": "PK", "frequency": 44, "gaindB": -12, "q": 3}],
                       gains, path=path)
-        peq, back = r.load_previous_output(path)
+        peq, back, origin = r.load_previous_output(path)
         assert back == gains, back                 # "31.5"/"20" -> 31.5/20
         assert peq[0]["frequency"] == 44
+        assert origin == {"id": "1"}                # ingen --refine-kedja -> origin = measurement
         m.JSON_FILE = path
         assert m.load_band_gains() == gains
+
+
+def test_save_output_carries_origin_and_records_diff():
+    with tempfile.TemporaryDirectory() as d:
+        p1 = Path(d) / "round1.json"
+        gains1 = {f: 0.0 for f in dsp8000.ISO_BANDS}
+        gains1[1000] = -2.0
+        r.save_output({"id": "1", "title": "Baseline"}, [], gains1, path=p1)
+
+        prev_filters, base, origin = r.load_previous_output(p1)
+        assert origin == {"id": "1", "title": "Baseline"}
+
+        p2 = Path(d) / "round2.json"
+        gains2 = dict(gains1)
+        gains2[1000] = -2.5      # 0.5 dB residual den här mätningen
+        gains2[63] = 1.0         # nytt band rört
+        r.save_output({"id": "2", "title": "Nr2"}, prev_filters, gains2, path=p2,
+                      origin_measurement=origin, previous_band_gains=base)
+
+        data = json.loads(p2.read_text(encoding="utf-8"))
+        # ursprungsmätningen (varv 1) bevarad, INTE skriven över av den nya mätningen
+        assert data["origin_measurement"] == {"id": "1", "title": "Baseline"}
+        assert data["measurement"] == {"id": "2", "title": "Nr2"}
+        diff = data["diff_from_previous_db"]
+        assert diff["1000"] == -0.5, diff["1000"]
+        assert diff["63"] == 1.0, diff["63"]
+        assert diff["20"] == 0.0, diff["20"]
+
+        # kedjan fortsätter: nästa refine ska fortfarande hitta varv 1:s origin
+        _, _, origin2 = r.load_previous_output(p2)
+        assert origin2 == {"id": "1", "title": "Baseline"}
 
 
 def test_coerce_types():
@@ -942,6 +974,35 @@ def test_run_gui_suggestion_named_file_and_rejects_traversal():
                     assert False, bad
                 except run_gui.DeviceError:
                     pass
+        finally:
+            run_gui.HERE = saved
+
+
+def test_suggestions_sorts_history_and_root_by_actual_mtime():
+    """suggestions() ska ranka history/suggestions/*.json och rot-filer
+    (rew_eq_suggestion*.json) i EN gemensam tidsordning - inte alla
+    history-filer före rot-filerna oavsett ålder. Annars pekar "Ladda in
+    senaste förslaget" fel så fort en rot-fil faktiskt är nyast (t.ex. en
+    körning av rew_script.py direkt i terminalen, utan --output)."""
+    import run_gui
+    saved = run_gui.HERE
+    with tempfile.TemporaryDirectory() as td:
+        run_gui.HERE = Path(td)
+        try:
+            sdir = Path(td) / "history" / "suggestions"
+            sdir.mkdir(parents=True)
+            old_hist = sdir / "suggestion-20260101-000000-old.json"
+            old_hist.write_text("{}")
+            newest_root = Path(td) / "rew_eq_suggestion.json"
+            newest_root.write_text("{}")
+            # rot-filen är faktiskt den senast ändrade
+            import os
+            import time
+            now = time.time()
+            os.utime(old_hist, (now - 100, now - 100))
+            os.utime(newest_root, (now, now))
+            files = run_gui.suggestions()["files"]
+            assert files[0] == "rew_eq_suggestion.json", files
         finally:
             run_gui.HERE = saved
 

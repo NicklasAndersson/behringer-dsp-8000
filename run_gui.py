@@ -336,24 +336,33 @@ def rew_measurements():
 
 
 def suggestions():
-    """Valbara EQ-förslag, nyaste först: history/suggestions/*.json (dina
-    körningar) + committade rew_eq_suggestion*.json i repo-roten."""
-    hist = sorted(_dir("suggestions").glob("*.json"), reverse=True)
-    rootfs = sorted(_root().glob("rew_eq_suggestion*.json"),
-                    key=lambda p: p.stat().st_mtime, reverse=True)
-    return {"files": [_rel(p) for p in hist] + [p.name for p in rootfs]}
+    """Valbara EQ-förslag, nyaste FÖRST enligt filens senast-ändrad-tid
+    (mtime) - oavsett om den ligger i history/suggestions/ (dina körningar
+    här) eller är en rew_eq_suggestion*.json i repo-roten (t.ex. en körning
+    av rew_script.py direkt i terminalen). Index 0 är alltså exakt den fil
+    "Ladda in senaste förslaget" i kontrollpanelen laddar - en enda
+    tidsordning över båda källorna, inte historik-filer före rot-filer."""
+    files = list(_dir("suggestions").glob("*.json")) + list(_root().glob("rew_eq_suggestion*.json"))
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return {"files": [_rel(p) for p in files]}
 
 
 def suggestion(name):
-    """Ett valt EQ-förslag -> {geq:[31], peq:[≤3], name, generated_at} för
-    redigeraren. Ingen MIDI. `name` är explicit (välj i Förslag-listan)."""
+    """Ett valt EQ-förslag -> {geq:[31], peq:[≤3], name, generated_at,
+    measurement, origin_measurement, diff_from_previous_db} för redigeraren.
+    origin_measurement/diff låter GUI:t visa ursprungsmätningen (varv 1) och
+    hur mycket en refine-mätning ändrade EQ:n, utan att behöva hålla reda på
+    det själv i measSel. Ingen MIDI. `name` är explicit (välj i Förslag-listan)."""
     import rew_to_dsp8000 as r
     p = _resolve(name, *SUGGESTION_GLOBS)
     data = json.loads(p.read_text(encoding="utf-8"))
     geq, peqs6 = r.suggestion_to_geq_peq(data)
     peq3 = [None if peqs6[i] is None else {**peqs6[i], "on": True} for i in (0, 2, 4)]
     return {"geq": geq, "peq": peq3, "name": name,
-            "generated_at": data.get("generated_at", "")}
+            "generated_at": data.get("generated_at", ""),
+            "measurement": data.get("measurement"),
+            "origin_measurement": data.get("origin_measurement"),
+            "diff_from_previous_db": data.get("diff_from_previous_db")}
 
 
 # ---------------------------------------------------------------- HTTP
@@ -414,6 +423,7 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
  <button id="fromCur">Basens EQ →</button>
  <button id="flat">Nolla</button>
 </div>
+<p class="muted" id="sugMeta">&nbsp;</p>
 <div class="bar">
  <b>3.</b>
  <button id="write"><b>Skriv till enheten</b></button>
@@ -477,10 +487,15 @@ HTML = r"""<!doctype html><meta charset="utf-8"><title>DSP8000 kontrollpanel</ti
       (ingen vald mätning = välj i kommandopanelen).</li>
   <li>Utskrift och ev. frågor hamnar i <b>Kommandopanelen</b> nedan – den öppnas
       automatiskt, svara i rutan där. När den är klar:
-      <button id="loadSug3">Ladda in senaste förslaget</button>.</li>
-  <li>Andra varvet (ny mätning gjord <b>med</b> EQ:n aktiv): välj den nya mätningen
-      och det förslag du vill förfina, <button id="runRefine">Refine → nytt förslag</button>,
-      ladda in, skriv igen.</li>
+      <button id="loadSug3" title="Väljer filen med senast ändrad tid i history/suggestions/ ELLER rew_eq_suggestion*.json i repo-roten (samma lista/ordning som förslagsväljaren i steg 2) och laddar den – inte nödvändigtvis just den du skapade i steg ovan, om något annat skrivits senare.">Ladda in senaste förslaget (nyaste filen)</button>
+      – laddar samma fil som hamnar överst i <code>sugSel</code> ovan; kolla
+      filnamn/tid som visas under redigeraren efteråt om du är osäker på vilken.</li>
+  <li>Andra varvet (ny mätning gjord <b>med</b> EQ:n aktiv): välj bara den <b>nya</b>
+      mätningen (nr2) och det förslag du vill förfina, <button id="runRefine">Refine →
+      nytt förslag</button>. Ursprungsmätningen (varv 1) behöver du inte peka ut igen -
+      den följer med automatiskt från det valda förslaget. Ladda in det nya förslaget
+      (<code>sugSel</code> ovan) för att se ursprungsmätningen och en diff mot förra
+      varvet, skriv igen.</li>
  </ol>
 </details>
 
@@ -704,6 +719,28 @@ async function loadSugList(select) {
     if (select) sel.value = select; else if (d.files.length) sel.selectedIndex = 0;
   } catch (e) { sel.innerHTML = `<option value="">${e}</option>`; }
 }
+function sugMetaHtml(d) {
+  const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const meas = d.measurement, origin = d.origin_measurement;
+  let parts = [];
+  if (origin && meas && String(origin.id) !== String(meas.id)) {
+    parts.push(`Ursprunglig mätning (varv 1): <b>${esc(origin.title)}</b>`
+      + (origin.date ? ` (${esc(origin.date)})` : '') + ` — den här mätningen: <b>${esc(meas.title)}</b>`
+      + (meas.date ? ` (${esc(meas.date)})` : ''));
+  } else if (meas) {
+    parts.push(`Mätning: <b>${esc(meas.title)}</b>` + (meas.date ? ` (${esc(meas.date)})` : ''));
+  }
+  const diff = d.diff_from_previous_db;
+  if (diff) {
+    const changed = Object.entries(diff)
+      .filter(([, v]) => Math.abs(v) >= 0.05)
+      .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a));
+    parts.push(changed.length
+      ? 'Δ mot förra varvet: ' + changed.map(([f, v]) => `${f} Hz ${v > 0 ? '+' : ''}${v.toFixed(1)} dB`).join(', ')
+      : 'Δ mot förra varvet: inga band ändrade ≥0,05 dB.');
+  }
+  return parts.join('<br>') || '&nbsp;';
+}
 async function loadSug() {
   const f = $('sugSel').value;
   if (!f) return say('inget förslag valt – kör steg 1 först', 'err');
@@ -713,6 +750,7 @@ async function loadSug() {
     setEditorGeq(d.geq); setEditorPeq(d.peq);
     setEditorFrom('förslag ' + d.name
       + (d.generated_at ? ' (' + d.generated_at.slice(0,16).replace('T',' ') + ')' : ''));
+    $('sugMeta').innerHTML = sugMetaHtml(d);
     say(f + ' inläst i redigeraren', 'ok');
   } catch (e) { say(e, 'err'); }
 }

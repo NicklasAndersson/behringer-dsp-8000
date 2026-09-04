@@ -31,22 +31,50 @@ def bar(db, scale=dsp8000.GRAPHIC_MAX_BOOST_DB):
 def render(data):
     scale = dsp8000.GRAPHIC_MAX_BOOST_DB
     m = data.get("measurement", {})
+    origin = data.get("origin_measurement")
+    diff = data.get("diff_from_previous_db") or {}
     bands = data.get("graphic_band_gains_db", {})
     peqs = sorted(data.get("peq_filters", []),
                   key=lambda f: abs(f.get("gaindB", 0)), reverse=True)
+
+    origin_note = ""
+    if origin and origin.get("id") != m.get("id"):
+        origin_note = (f"<p class='meta'>Ursprunglig mätning (varv 1): "
+                        f"<b>{html.escape(str(origin.get('title', '?')))}</b> "
+                        f"({html.escape(str(origin.get('date', '')))})</p>")
+
+    diff_header = "<th>Δ mätning 2</th>" if diff else ""
 
     rows = []
     for f in dsp8000.ISO_BANDS:
         g = bands.get(str(f), bands.get(f, 0.0))
         cc_l = dsp8000.CC_GRAPHIC_LEFT[f]
         cc_r = dsp8000.CC_GRAPHIC_RIGHT[f]
+        diff_cell = ""
+        if diff:
+            d = diff.get(str(f), diff.get(f, 0.0))
+            cls = "warn-cell" if abs(d) >= 0.05 else ""
+            diff_cell = f"<td class='g {cls}'>{d:+.1f} dB</td>"
         rows.append(
             f"<tr><td class='f'>{f} Hz</td>"
             f"<td class='g'>{g:+.1f} dB</td>"
             f"<td>{bar(g)}</td>"
+            f"{diff_cell}"
             f"<td class='cc'>L {cc_l} / R {cc_r}</td>"
             f"<td class='cc'>{dsp8000.db_to_cc(g)}</td></tr>"
         )
+    diff_note = ""
+    if diff:
+        changed = sorted(
+            ((f, diff.get(str(f), diff.get(f, 0.0))) for f in dsp8000.ISO_BANDS),
+            key=lambda fd: -abs(fd[1]))
+        changed = [(f, d) for f, d in changed if abs(d) >= 0.05]
+        diff_note = (
+            "<p class='meta'>Δ mätning 2 = hur mycket den här mätningen ändrade "
+            "varje band mot förra varvet. "
+            + (f"Störst ändring: {changed[0][0]} Hz ({changed[0][1]:+.1f} dB)."
+               if changed else "Inga band ändrade ≥0,05 dB.")
+            + "</p>")
 
     peq_rows = []
     for i, f in enumerate(peqs[:dsp8000.PEQ_COUNT], 1):
@@ -77,6 +105,7 @@ def render(data):
  .pos{{position:absolute;left:50%;top:0;bottom:0;background:#3a7}}
  .neg{{position:absolute;top:0;bottom:0;background:#c55}}
  .warn{{color:#a50;background:#fff8e8;padding:.5rem;border-radius:4px}}
+ .warn-cell{{color:#a50;font-weight:600}}
  @media(prefers-color-scheme:dark){{
    body{{background:#1a1a1a;color:#ddd}} td,th{{border-color:#333}}
    .bar{{background:#2a2a2a}} .warn{{background:#332b18}}
@@ -85,12 +114,14 @@ def render(data):
 <h1>DSP8000 – vad som ska ställas in</h1>
 <p class="meta">Från mätning <b>{html.escape(str(m.get('title', '?')))}</b>
  ({html.escape(str(m.get('date', '')))}) · genererad {html.escape(str(data.get('generated_at', '')))}</p>
+{origin_note}
 
 <h2>Grafisk EQ (31 band, per kanal)</h2>
 <p class="meta">Kolumnerna: målförstärkning · CC-nummer (vänster/höger kanal,
  offset {dsp8000.CC_OFFSET}) · CC-värde att skicka (CC = 64 + dB×4, verifierat).</p>
+{diff_note}
 <table>
- <tr><th>Band</th><th class="g">Gain</th><th>–{scale:.0f} ····· 0 ····· +{scale:.0f}</th><th>CC #</th><th>CC-värde</th></tr>
+ <tr><th>Band</th><th class="g">Gain</th><th>–{scale:.0f} ····· 0 ····· +{scale:.0f}</th>{diff_header}<th>CC #</th><th>CC-värde</th></tr>
  {''.join(rows)}
 </table>
 
