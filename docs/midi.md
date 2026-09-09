@@ -9,6 +9,10 @@ Kort version av det viktigaste, plus de öppna frågorna samlade:
 [readme.md](../readme.md). Skripten som använder allt det här:
 [verktyg.md](verktyg.md). REW-halvan: [rew.md](rew.md).
 
+> Skripten och referensdumparna ligger i **`python/`** (arkiverad 2026-09-09):
+> `python/dumps/*.syx`, `python/syx_tools.py`, `python/run.sh`. Sökvägar som
+> `dumps/…` nedan är skrivna som man kör dem – från `python/`.
+
 **Verifierat mot enheten 2026-08-31, 2026-09-02 och 2026-09-03** med en PreSonus AudioBox
 USB som MIDI-interface. Det som *inte* är testat står uttryckligen markerat.
 
@@ -387,7 +391,7 @@ EQ-Design:s kommando `21`, **inte** CC-skalan (rättat 2026-09-03: master
 senare). EQ-Design 1.0 känner inte till `33`. `monitor` skriver ut den i dB.
 Kvar att verifiera på hårdvara: ett band på känt dB mot ramens råvärde.
 
-### 6.6 Referensdumpar i `dumps/`
+### 6.6 Referensdumpar i `dumps/` (`python/dumps/`)
 
 | Fil | Sub-kod | Innehåll | Används av |
 |---|---|---|---|
@@ -455,7 +459,7 @@ device-ID = inkanalen.
 | `21` | båda | `<prog>` + 32 L + 32 R | grafisk EQ opackad: `dB·2 + 32` (0–64, 32 = 0 dB), band 0–30 + master per kanal | **verifierat 2026-09-03** → DSP: 1 kHz +8 dB landade direkt, utan knapptryck och utan svar. Samma sak som CC-vägen, men alla 64 värden atomärt i ett meddelande |
 | `22` | båda | `00` + 32 packade (24 byte = 6 PEQ-poster + 4 fyll) | de sex parametriska filtren i arbetsbufferten | **verifierat 2026-09-03** → DSP: L1 = 100 Hz / 1 okt / −6 dB syntes på PEQ-sidan direkt, utan knapptryck – **granulär PEQ-skrivning finns** |
 | `20` | båda | `00` + 16 packade (14 byte = huvud 10 + delay L/R) | limiter, gate, crossfade, shelving, program, delay | otestat |
-| `23` | båda | `<prog>` + 120 packade (104 byte) | ett helt program 1–100 | otestat |
+| `23` | båda | `<prog>` + 120 packade (104 byte) | ett helt program 1–100 | otestat – **kontrollpanelens "Skriv till platsen" skickar det** (prognummer antaget 0-baserat som i `21`/`33`; programmets övriga byte, t.ex. delay, tas från senaste dumpen). Verifiera enligt readme:s checklista innan det räknas som en väg som funkar |
 | `15` | → DSP | 1 byte flaggor | RTA-styrning: bit 0–3 = fyra RTA-inställningar (auto gain, detektor, max display, 1/0,5 dB – ordningen okänd), bit 4 = engångspuls. Skickas efter varje `11` ⇒ RTA-strömmen | otestat |
 | `11` | DSP → | 1 byte + 80 packade (70 byte) | RTA-ram: 64 bandvärden + statusbyte (nivå/gain i 4 dB-steg) | otestat |
 | `41` / `42` | båda | – | läge EQ / RTA (menyn Mode; enheten skickar samma vid byte på fronten) | **verifierat 2026-09-03**: displayen byter skärm, inget svar |

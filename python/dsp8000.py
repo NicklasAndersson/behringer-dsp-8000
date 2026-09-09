@@ -71,10 +71,29 @@ def q_to_octaves(q):
     return 2 * math.asinh(1 / (2 * q)) / math.log(2)
 
 
+# Grafiska EQ:n är 1/3-oktav. Q för ett 1/3-oktavsband (~4,32): allt bredare än
+# så kan de 31 banden göra själva, allt smalare är det bara PEQ som klarar.
+Q_THIRD_OCTAVE = 1 / (2 * math.sinh(math.log(2) / 2 * (1 / 3)))
+
+
+def filter_priority(gain_db, q):
+    """Hur illa det vore att lämna filtret åt grafiska EQ:n - rankningen när
+    man måste välja bort filter (enheten har bara PEQ_COUNT per kanal).
+
+    |gain| gånger hur mycket smalare filtret är än ett 1/3-oktavsband. Smala
+    djupa rumsmoder vinner därför över breda lyft: de breda kan de 31 banden
+    göra lika bra själva, den smala dippen kan de inte göra alls."""
+    return abs(gain_db or 0) * max(1.0, (q or 0) / Q_THIRD_OCTAVE)
+
+
 if __name__ == "__main__":
     assert len(ISO_BANDS) == 31
     assert CC_GRAPHIC_LEFT[20] == 0 and CC_GRAPHIC_LEFT[1000] == 17
     assert CC_GRAPHIC_RIGHT[1000] == 49 and CC_MASTER_LEFT == 31
+    assert abs(Q_THIRD_OCTAVE - 4.318) < 0.001 and abs(q_to_octaves(Q_THIRD_OCTAVE) - 1 / 3) < 1e-9
+    # smal djup mod slår bred, lika djup korrigering; bred slår smal och grund
+    assert filter_priority(-6, 12) > filter_priority(-8, 1) > filter_priority(-1, 12)
+    assert filter_priority(-8, 1) == filter_priority(-8, 4)   # allt brett vägs lika
     assert clamp_band_gain(2.1) == 2.0
     assert clamp_band_gain(9.0) == 3.0        # boost kapas till SAFE_BOOST_DB
     assert clamp_band_gain(9.0, max_boost=12) == 9.0

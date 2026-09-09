@@ -34,8 +34,10 @@ def render(data):
     origin = data.get("origin_measurement")
     diff = data.get("diff_from_previous_db") or {}
     bands = data.get("graphic_band_gains_db", {})
+    # samma rankning som keep_top_filters: smala djupa filter först
     peqs = sorted(data.get("peq_filters", []),
-                  key=lambda f: abs(f.get("gaindB", 0)), reverse=True)
+                  key=lambda f: dsp8000.filter_priority(f.get("gaindB", 0), f.get("q", 0)),
+                  reverse=True)
 
     origin_note = ""
     if origin and origin.get("id") != m.get("id"):
@@ -87,8 +89,9 @@ def render(data):
         )
     extra = len(peqs) - dsp8000.PEQ_COUNT
     peq_note = (f"<p class='warn'>REW föreslog {len(peqs)} filter, "
-                f"DSP8000 har {dsp8000.PEQ_COUNT}. De {extra} minsta visas inte "
-                f"- mät om efteråt och lägg ev. till manuellt.</p>") if extra > 0 else ""
+                f"DSP8000 har {dsp8000.PEQ_COUNT}. De {extra} lägst prioriterade "
+                f"visas inte (breda och grunda först bort - dem klarar grafiska "
+                f"EQ:n) - mät om efteråt och lägg ev. till manuellt.</p>") if extra > 0 else ""
 
     return f"""<!doctype html><meta charset="utf-8">
 <title>DSP8000-konfig</title>

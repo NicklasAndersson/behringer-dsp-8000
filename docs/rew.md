@@ -4,6 +4,11 @@ Hur en mätning i Room EQ Wizard blir ett EQ-förslag för DSP8000: uppkoppling,
 målkurva, Match Target, REW:s HTTP-API och `rew_script.py`. Enheten beskrivs i
 [readme.md](../readme.md), skripten i stort i [verktyg.md](verktyg.md).
 
+> Python-sidan ligger i **`python/`** (arkiverad 2026-09-09) – `cd python`
+> först, så stämmer kommandona nedan rakt av. Kontrollpanelen
+> `dsp8000_gui.html` i roten kan läsa förslagsfilerna direkt ("Importera
+> REW-JSON"), men pratar inte med REW:s API.
+
 ---
 
 ## 1. Uppkoppling och grundinställningar
@@ -103,10 +108,17 @@ Kräver **inte** REW Pro. Du kör själv sweepen i REW. Sedan:
    `Calculate target level` + `Match target` via API. **Målkurvans form**
    (tilt/house curve/LF cutoff) rörs inte som default men kan sättas med
    `--target` / `--house-curve`
-3. läser ut de parametriska filtren, **behåller de 3 PK-filter med störst
-   |gain|** (`dsp8000.PEQ_COUNT`; shelf-filter kastas, enheten har inga) och
-   skriver tillbaka dem till REW så `/eq/frequency-response` speglar exakt det
-   som hamnar på enheten
+3. läser ut de parametriska filtren och **behåller de 3 viktigaste PK-filtren**
+   (`dsp8000.PEQ_COUNT`; shelf-filter kastas, enheten har inga), sedan skrivs de
+   tillbaka till REW så `/eq/frequency-response` speglar exakt det som hamnar på
+   enheten.
+
+   **Rankningen** (`dsp8000.filter_priority`) är `|gain| × max(1, Q/Q⅓)` där
+   `Q⅓ ≈ 4,32` är Q för ett 1/3-oktavsband: **smala djupa filter först**. En bred
+   korrigering kan de 31 banden göra lika bra själva, en smal rumsmod kan de inte
+   göra alls – så när något måste väljas bort ska det vara det bredaste och
+   grundaste. Samma rankning används av kontrollpanelens REW-import,
+   `rew_export.py` och `show_config.py`
 4. beräknar 31 grafiska bandvärden: `(target − respons)` med 1/3-oktavs
    utjämning vid ISO-frekvenserna, centrerat kring median, klippt till
    `SAFE_BOOST_DB` (+3) upp / −16 ner
@@ -160,6 +172,35 @@ python rew_script.py --measurement <baslinje-id> \
 
 I kontrollpanelen: **Baslinjemätning** + **Förfiningsmätning** i egna
 listor, dämpningsfältet, **Bygg förslag**.
+
+### `rew_export.py` – välj mätning i ett fönster
+
+`./run.sh export` (http://127.0.0.1:8767) gör steg 1 utan terminal: mätningarna
+i en lista, kurvorna och den preliminära korrigeringen ritade, val av **hur många
+parametriska filter** som ska användas (0–3), och en spara-knapp som öppnar en
+filväljare där du väljer var förslagsfilen ska ligga (arkivkopia hamnar alltid i
+`history/suggestions/`). Att välja en
+mätning ändrar ingenting i REW – först "Räkna om" kör Match target. Färre filter
+betyder mer jobb för de 31 banden, och sidan visar skillnaden i siffror innan du
+sparar. Samma funktioner som `rew_script.py` under huven, se
+[verktyg.md](verktyg.md#rew_exportpy--rew--förslagsfil-med-graf).
+
+### Förslaget in i kontrollpanelen
+
+`dsp8000_gui.html` läser förslagsfilen direkt – **Importera från REW**, välj
+filen, och panelen visar resultatet innan något skrivs:
+
+| Läge | Räkning | När |
+|---|---|---|
+| **Ersätt** | band = förslag × andel, PEQ = de 3 viktigaste (smala djupa först) × andel | mätningen gjord **utan** EQ i kedjan (varv 1) |
+| **Merga** | band = nuvarande + förslag × andel, PEQ orörda | mätningen gjord **med** EQ:n på (varv 2+) – samma sak som `--refine`, där andelen är `--refine-damping` |
+| **Merga mot importerad SysEx-fil** | band = filens band + förslag × andel, filens PEQ och master följer med | som ovan, men basen läses ur en exporterad EQ-fil i stället för reglagen – säkrast när du vet att filen är det som satt på enheten under mätningen |
+
+Andelen är samma knopp som `--refine-damping`: 100 % = hela steget (störst
+förändring), 50 % = halva felet per varv (stabilt), 0 % = ingen ändring.
+Panelen visar snittförändringen över de 31 banden i procent av ±16 dB och i dB,
+plus största enskilda ändringen, och låter dig **skriva till DSP** eller
+**ångra**. Panelen pratar inte med REW:s API – filen laddas upp för hand.
 
 ### Målkurvan via API
 

@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 import dsp8000
+import rew_export
 import rew_script as r
 import rew_to_dsp8000 as m   # importerbar utan mido (mido = None då)
 import syx_tools
@@ -114,6 +115,23 @@ def test_keep_top_filters_picks_biggest_and_reorders():
     assert [x["frequency"] for x in kept] == [44, 80, 160]  # 3 största |gain|, sorterade på freq
     assert [x["index"] for x in kept] == [1, 2, 3]
     assert len(sent["filters"]) == 22  # resten None, lika många platser som REW har
+
+
+def test_keep_top_filters_prefers_narrow_and_deep():
+    """Måste man välja bort filter ska den smala djupa moden vinna över det
+    bredare, djupare lyftet - det breda klarar grafiska EQ:n själv."""
+    sent = {}
+    r.api_post = lambda p, b: sent.update(b) or {}
+    r.api_get = lambda p: [{"type": "None"}] * 20
+    fs = [
+        {"type": "PK", "frequency": 400, "gaindB": -8, "q": 1},    # bred, störst |gain|
+        {"type": "PK", "frequency": 60, "gaindB": -6, "q": 12},    # smal rumsmod
+        {"type": "PK", "frequency": 90, "gaindB": -1, "q": 12},    # smal men grund
+    ]
+    r.keep_top_filters("1", fs, n=1)
+    assert [x["frequency"] for x in sent["filters"] if x["type"] != "None"] == [60]
+    r.keep_top_filters("1", fs, n=2)
+    assert [x["frequency"] for x in sent["filters"] if x["type"] != "None"] == [60, 400]
 
 
 def test_keep_top_filters_skips_shelf_filters():
@@ -1071,6 +1089,124 @@ def test_dsp8000_selftest():
                    cwd=Path(__file__).parent, capture_output=True)
 
 
+# rew_export.py: samma räkning som rew_script, men bakom ett litet localhost-GUI.
+# Testerna kör det utan REW genom att fejka api_get/api_post.
+# REW:s filterlista som Match target skulle ge: bred djup, smal djup, smal grund.
+_PROPOSED = [
+    {"type": "PK", "frequency": 400, "gaindB": -8, "q": 1, "enabled": True},
+    {"type": "PK", "frequency": 63, "gaindB": -6, "q": 12, "enabled": True},
+    {"type": "PK", "frequency": 120, "gaindB": -5, "q": 8, "enabled": True},
+    {"type": "PK", "frequency": 900, "gaindB": -1, "q": 10, "enabled": True},
+]
+
+
+def _fake_rew(meas, tgt=((10, 80), (30000, 80)), title="Vardagsrum L+R", eq=None):
+    """api_get/api_post som fejkar REW: mätningslistan, kurvorna och en
+    filterlista som kommer ihåg vad man skrivit till den (som REW gör).
+    `eq` = responsen på /eq/frequency-response, dvs efter filtren."""
+    state = {"filters": [dict(f) for f in _PROPOSED], "seen": []}
+
+    def get(path, **kw):
+        state["seen"].append(path)
+        if path == "/measurements":
+            return {"1": {"title": "gammal"}, "7": {"title": title, "date": "2026-Sep-09"}}
+        if "target-response" in path:
+            return _curve(list(tgt))
+        if path.endswith("/filters"):
+            return state["filters"]
+        if "eq/frequency-response" in path:
+            return _curve(list(eq or meas))
+        return _curve(list(meas))
+
+    def post(path, body):
+        if path.endswith("/filters"):
+            state["filters"] = [f for f in body["filters"] if f.get("type") != "None"]
+        return {}
+
+    return get, post, state
+
+
+def test_rew_export_curve_reads_only():
+    """Att välja en mätning ska visa kurvor + preliminär korrigering och inte
+    röra REW:s tillstånd (inga POST, inga DELETE)."""
+    r.api_get = _fake_rew([(10, 80), (50, 80), (63, 90), (80, 80), (30000, 80)])[0]
+    r.api_post = lambda p, b: (_ for _ in ()).throw(AssertionError("skrev till REW: " + p))
+    r.api_delete = lambda p: (_ for _ in ()).throw(AssertionError("raderade i REW"))
+
+    d = rew_export.curve("7")
+    assert d["info"]["title"] == "Vardagsrum L+R"
+    assert len(d["meas"]) > 100 and len(d["target"]) > 100
+    assert set(d["bands"]) == {f"{f:g}" for f in dsp8000.ISO_BANDS}
+    assert d["bands"]["63"] < -9                      # puckeln blir en sänkning
+    assert d["stats"]["worst_db"] == d["bands"]["63"]
+    assert d["stats"]["spl_max"] >= 89 and d["stats"]["mean_abs"] > 0
+    assert d["stats"]["default_name"].endswith("-vardagsrum_l_r.json")
+    assert d["peq_max"] == dsp8000.PEQ_COUNT
+
+
+def test_rew_export_compute_and_save_writes_panel_format():
+    """Spara ska ge exakt den JSON dsp8000_gui.html importerar."""
+    import contextlib
+    get, post, state = _fake_rew([(10, 80), (50, 80), (63, 90), (80, 80), (30000, 80)])
+    r.api_get, r.api_post = get, post
+    with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+        rew_export.compute("7", dsp8000.PEQ_COUNT)
+        out = rew_export.save()
+        saved = json.loads(Path(out["path"]).read_text())
+        # sidan skriver användarens egen kopia via filväljaren ur samma text
+        assert json.loads(out["json"]) == saved
+
+    assert Path(out["path"]).parent.name == "suggestions"
+    assert out["name"].startswith("suggestion-") and out["name"].endswith(".json")
+    assert set(saved) >= {"graphic_band_gains_db", "peq_filters", "measurement"}
+    assert set(saved["graphic_band_gains_db"]) == {f"{f:g}" for f in dsp8000.ISO_BANDS}
+    assert len(saved["peq_filters"]) == dsp8000.PEQ_COUNT
+    assert saved["measurement"]["title"] == "Vardagsrum L+R"
+
+
+def test_rew_export_filter_count_picks_narrow_deep_and_recomputes_the_geq():
+    """Valt antal filter styr både vilka filter som behålls (smala djupa först)
+    och vad de 31 banden får göra: färre filter -> mer jobb åt grafiska EQ:n."""
+    peak = [(10, 80), (55, 80), (63, 92), (72, 80), (30000, 80)]
+    for n in (3, 2, 1):
+        get, post, state = _fake_rew(peak, eq=[(10, 80), (30000, 80)])   # filtren tar puckeln
+        r.api_get, r.api_post = get, post
+        c = rew_export.compute("7", n)
+        assert c["peq_count"] == n and len(c["filters"]) == n
+        assert c["proposed"] == len(_PROPOSED)
+        # smalast och djupast först: 63 Hz (Q12) före 120 Hz (Q8) före 400 Hz (bred)
+        assert [round(f["frequency"]) for f in c["filters"]] == [63, 120, 400][:n]
+        assert c["filters"][0]["bw_oct"] < 0.2 and c["filters"][0]["priority"] > 8
+        assert c["after"] and c["stats"]["mean_abs"] == 0.0      # platt efter filtren
+        assert len(state["filters"]) == n                        # REW har bara de valda
+
+    get, post, state = _fake_rew(peak, eq=[(10, 80), (30000, 80)])
+    r.api_get, r.api_post = get, post
+    zero = rew_export.compute("7", 0)
+    assert zero["peq_count"] == 0 and zero["filters"] == [] and zero["after"] is None
+    assert zero["stats"]["mean_abs"] > 0.0                       # banden får ta puckeln
+    assert zero["stats"]["worst"] == "63"
+    assert not any("eq/frequency-response" in p for p in state["seen"])
+    assert state["filters"] == _PROPOSED                         # REW orört utan filter
+
+
+def test_rew_export_save_without_compute_says_so():
+    rew_export.LAST.clear()
+    try:
+        rew_export.save()
+        assert False, "save() utan uträkning ska klaga"
+    except RuntimeError as e:
+        assert "Räkna om" in str(e)
+
+
+def test_rew_export_serves_the_page_and_only_its_own_files():
+    """Sidan får ISO-banden inbakade, och /file lämnar inte ut något utanför
+    history/suggestions/ (namnet reduceras till filnamnet)."""
+    page = rew_export.HTML.replace("__BANDS__", json.dumps([f"{f:g}" for f in dsp8000.ISO_BANDS]))
+    assert "__BANDS__" not in page and '"20"' in page and '"20000"' in page
+    assert Path("../../etc/passwd").name == "passwd"     # samma reduktion som /file gör
+
+
 # dsp8000_gui.html bär en egen JS-kopia av SysEx-kodningen (Web MIDI, ingen
 # Python i webbläsaren). Det här låser den mot syx_tools så de inte glider isär.
 JS_HARNESS = """
@@ -1079,13 +1215,33 @@ const html = fs.readFileSync(process.argv[2], 'utf8');
 const src = html.split('// --- kodning (DSP8000 SysEx, speglar syx_tools.py) ---')[1]
                 .split('// --- slut kodning ---')[0];
 const m = await import('data:text/javascript,' + encodeURIComponent(src
-  + '\\nexport {geqMessage, peqMessage, decodeDump};'));
+  + '\\nexport {geqMessage, peqMessage, decodeDump, decodeProgram, programBytes, programMessage, progBase, PROG_LEN, rewBands, filterPriority, ISO};'));
 const d = m.decodeDump([...fs.readFileSync(process.argv[3])]);
 const geq = JSON.parse(process.argv[4]), peq = JSON.parse(process.argv[5]);
+// Programmen 1-100: namnen, och att avkoda->koda ger tillbaka exakt samma byte
+// (skrivvägen, kommando 23, rör bara namn/PEQ/GEQ och behåller resten).
+const names = [], rt = [];
+for (let n = 1; n <= 100; n++) {
+  const p = m.decodeProgram(d.img, n);
+  names.push(p.name);
+  const base = [...d.img.slice(m.progBase(n), m.progBase(n) + m.PROG_LEN)];
+  if (JSON.stringify(m.programBytes(base, p)) !== JSON.stringify(base)) rt.push(n);
+}
+// REW-import: ersätt (förslaget rakt av) och merga (ovanpå nuvarande), med andel.
+const sug = JSON.parse(process.argv[6]), cur = m.ISO.map((_, i) => i === 0 ? 2 : 0);
 console.log(JSON.stringify({
+  prio: [[-6, 12], [-8, 1], [-1, 12], [-9, 4.318], [0, 5]].map(([g, q]) => m.filterPriority(g, q)),
+  rew: {
+    replace100: m.rewBands(sug, cur, 1, false),
+    replace50: m.rewBands(sug, cur, 0.5, false),
+    merge50: m.rewBands(sug, cur, 0.5, true),
+    merge0: m.rewBands(sug, cur, 0, true),
+  },
   L: d.L, R: d.R, mL: d.mL, mR: d.mR, peq: d.peq,
   geqMsg: m.geqMessage(geq, geq.map(v => -v), 1.5, -0.5),
   peqMsg: m.peqMessage(peq),
+  names, roundtripFel: rt, imgLen: d.img.length,
+  progMsg: m.programMessage(10, Array(104).fill(0)),
 }));
 """
 
@@ -1105,8 +1261,9 @@ def test_gui_html_sysex_matches_syx_tools():
         js = Path(td) / "h.mjs"
         js.write_text(JS_HARNESS)
         got = json.loads(subprocess.run(
-            [shutil.which("node"), str(js), str(here / "dsp8000_gui.html"), str(dump_path),
-             json.dumps(geq), json.dumps([p or {"gain_db": 0} for p in peq])],
+            [shutil.which("node"), str(js), str(here.parent / "dsp8000_gui.html"), str(dump_path),
+             json.dumps(geq), json.dumps([p or {"gain_db": 0} for p in peq]),
+             json.dumps({"20": -4, "25": 3.3, "1000": 40, "20000": "trasig"})],
             check=True, capture_output=True, text=True).stdout)
 
     assert got["geqMsg"] == list(syx_tools.geq_message(geq, [-v for v in geq], 1.5, -0.5))
@@ -1120,6 +1277,138 @@ def test_gui_html_sysex_matches_syx_tools():
     for a, c in zip(got["peq"], syx_tools.decode_peq(b)):
         assert a["on"] == c["on"] and a["gain_db"] == c["gain_db"]
         assert math.isclose(a["freq_hz"], c["freq_hz"]) and math.isclose(a["bw_oct"], c["bw_oct"])
+
+    # programmen (presets): samma namn som syx_tools, och skrivvägens
+    # avkoda->koda ändrar inte en byte i något av de 100 programmen.
+    img = syx_tools.unpack_image(b)
+    assert got["imgLen"] == syx_tools.IMAGE_LEN
+    assert got["names"] == [syx_tools.program_name(img, n) for n in range(1, 101)]
+    assert got["roundtripFel"] == []
+    assert got["progMsg"][:2] == [0x23, 9] and len(got["progMsg"]) == 122
+
+    # filterrankningen ska vara identisk med dsp8000.filter_priority
+    for got_p, (g, q) in zip(got["prio"], [(-6, 12), (-8, 1), (-1, 12), (-9, 4.318), (0, 5)]):
+        assert abs(got_p - dsp8000.filter_priority(g, q)) < 1e-9
+
+    # REW-importen i panelen: samma räkning som --refine (nuvarande + andel *
+    # residual), 0,5 dB-steg, klippt till ±16 dB. cur = +2 dB på 20 Hz, 0 annars.
+    rew = got["rew"]
+    assert rew["replace100"][:2] == [-4, 3.5]          # 3,3 dB -> enhetens steg
+    assert rew["replace50"][:2] == [-2, 1.5]
+    assert rew["merge50"][:2] == [0, 1.5]              # 2 + (-4 * 0,5)
+    assert rew["merge0"] == [2] + [0] * 30             # 0 % ändrar ingenting
+    assert rew["replace100"][17] == 16                 # 1 kHz: 40 dB klipps
+    assert rew["replace100"][30] == 0                  # "trasig" -> 0, inte NaN
+    assert all(v == 0 for v in rew["replace100"][2:17])  # band utan förslag
+
+
+# Sidan laddas i node med en minimal DOM: getElementById ger null för id:n som
+# inte finns i HTML:en (eller skapats via innerHTML), så ett felstavat id kraschar
+# precis som i webbläsaren. Kör sidans eget #selftest och drar sedan igenom
+# REW-importen: ladda förslag -> förhandsvisning -> ångra.
+SMOKE_HARNESS = """
+import fs from 'node:fs';
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]));
+const els = new Map();
+const mkEl = id => ({
+  id, value: (html.match(new RegExp(`<[^>]*id="${id}"[^>]*>`)) || [''])[0]
+       .match(/value="([^"]*)"/)?.[1] || '',
+  textContent: '', className: '', hidden: false, style: {}, files: [],
+  width: 1000, height: 200,
+  addEventListener(t, fn) { (this._l ||= {})[t] = fn; }, appendChild() {}, click() {},
+  getContext: () => new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: () => true }),
+  set innerHTML(v) { for (const m of String(v).matchAll(/id="([^"]+)"/g)) ids.add(m[1]); this._h = v; },
+  get innerHTML() { return this._h || ''; },
+});
+globalThis.document = {
+  getElementById: id => ids.has(id) ? (els.get(id) || els.set(id, mkEl(id)).get(id)) : null,
+  createElement: mkEl, addEventListener() {}, title: '',
+};
+globalThis.localStorage = { getItem: () => null, setItem() {} };
+Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+globalThis.location = { hash: '#selftest' };
+globalThis.performance = { now: () => 0 };
+globalThis.URL = { createObjectURL: () => 'blob:x', revokeObjectURL() {} };
+await import('data:text/javascript,' + encodeURIComponent(html.split('<script>')[1].split('</script>')[0]));
+
+const $ = id => document.getElementById(id);
+const selftest = $('status').textContent;      // innan flash() skriver över den
+const bands = () => [...Array(31)].map((_, i) => +$('s' + i).value);
+const json = fs.readFileSync(process.argv[3], 'utf8');
+const dump = fs.readFileSync(process.argv[4]);        // riktig minnesdump
+$('rewmode').value = 'replace'; $('rewamt').value = '100';
+await $('file')._l.change({ target: { files: [{ name: 'rew.json', text: async () => json }], value: '' } });
+const full = bands(), summary = $('rewsum').innerHTML.replace(/<[^>]+>/g, '');
+$('rewamt').value = '50'; $('rewamt')._l.input();
+const half = bands();
+$('rewundo').onclick();
+const undone = bands(), hiddenAfterUndo = $('rewresult').hidden;
+
+// SysEx-fil: importera ett känt läge (+2 dB överallt) och merga REW-förslaget
+// ovanpå filen i stället för reglagen (läge 3).
+const eqFile = JSON.stringify({
+  format: 'dsp8000-eq-1', name: 'FIL', master_l_db: 0, master_r_db: 0,
+  geq_l_db: Array(31).fill(2), geq_r_db: Array(31).fill(2), peq: [],
+});
+const enc = new TextEncoder();
+const fileEvent = (name, text) => ({ target: { value: '', files: [{ name,
+  text: async () => text, arrayBuffer: async () => enc.encode(text).buffer }] } });
+await $('sxfile')._l.change(fileEvent('eq.json', eqFile));
+const imported = bands();
+$('rewmode').value = 'sysex'; $('rewamt').value = '50';
+await $('file')._l.change(fileEvent('rew.json', json));
+const merged = bands(), sysexSummary = $('rewsum').innerHTML.replace(/<[^>]+>/g, '');
+
+// samma väg tar emot en riktig .syx-minnesdump: reglagen + programlistan fylls
+await $('sxfile')._l.change({ target: { value: '', files: [{ name: 'dump.syx',
+  arrayBuffer: async () => dump.buffer.slice(dump.byteOffset, dump.byteOffset + dump.length) }] } });
+console.log(JSON.stringify({ selftest, full, half, summary, undone, imported, hiddenAfterUndo,
+                             merged, sysexSummary, hidden: $('rewresult').hidden,
+                             fromDump: bands(), progList: $('progn').innerHTML }));
+"""
+
+
+def test_gui_html_loads_and_rew_import_works():
+    """Sidan laddas utan DOM-fel, dess #selftest går igenom, och REW-importen
+    ger förhandsvisning (100 % / 50 %) som går att ångra."""
+    if not shutil.which("node"):
+        return
+    here = Path(__file__).parent
+    gains = json.loads((here / "rew_eq_suggestion.json").read_text())["graphic_band_gains_db"]
+    with tempfile.TemporaryDirectory() as td:
+        js = Path(td) / "smoke.mjs"
+        js.write_text(SMOKE_HARNESS)
+        got = json.loads(subprocess.run(
+            [shutil.which("node"), str(js), str(here.parent / "dsp8000_gui.html"),
+             str(here / "rew_eq_suggestion.json"),
+             str(here / "dumps" / "dsp8000_sysex_peq_device.syx")],
+            check=True, capture_output=True, text=True).stdout)
+
+    # JS:s Math.round (halva uppåt), inte Pythons bankers rounding
+    def band_db(db):
+        return max(-16.0, min(16.0, math.floor(db * 2 + 0.5) / 2))
+
+    assert got["selftest"] == "självtest OK"
+    for i, band in enumerate(dsp8000.ISO_BANDS):
+        assert got["full"][i] == band_db(gains[str(band)])          # hela förslaget
+        assert got["half"][i] == band_db(gains[str(band)] * 0.5)    # halva andelen
+    assert got["undone"] == [0] * 31 and got["hiddenAfterUndo"] is True
+    assert got["hidden"] is False          # nya importen visar rutan igen
+    assert "snittförändring" in got["summary"]
+
+    # läge 3: förslaget läggs ovanpå den importerade SysEx-filens band (+2 dB),
+    # inte ovanpå reglagen - och filens PEQ/master följer med
+    assert got["imported"] == [2] * 31
+    for i, band in enumerate(dsp8000.ISO_BANDS):
+        assert got["merged"][i] == band_db(2 + gains[str(band)] * 0.5)
+    assert "SysEx-filen" in got["sysexSummary"]
+
+    # samma import tar en riktig minnesdump: banden ur arbetsbufferten och
+    # programnamnen i listan
+    geq = syx_tools.decode_geq((here / "dumps" / "dsp8000_sysex_peq_device.syx").read_bytes())
+    assert got["fromDump"] == geq["L"]
+    assert "BAS  ROCK" in got["progList"] and "arbetsbufferten" in got["progList"]
 
 
 if __name__ == "__main__":

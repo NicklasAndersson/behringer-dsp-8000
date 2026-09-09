@@ -8,7 +8,13 @@
 
   Skriver 31-bands GEQ (SysEx 21) och de 6 parametriska filtren (SysEx 22)
   direkt till arbetsbufferten - inget knapptryck på enheten. Läser tillbaka
-  hela minnesdumpen (SysEx-förfrågan 70 01) och ritar kurvan.
+  hela minnesdumpen (SysEx-förfrågan 70 01), ritar kurvan och plockar ut de
+  100 programmen ur bilden; ett program kan skrivas tillbaka med SysEx 23
+  (avkodat ur EQ-Design, ännu inte verifierat mot hårdvara). REW-förslag
+  (python/rew_script.py:s JSON) importeras lokalt - ersätt, merga ovanpå
+  reglagen eller ovanpå en importerad EQ-fil, med valbar andel; allt
+  förhandsvisas och kan ångras. EQ:n kan exporteras till och importeras från
+  fil (egen JSON med SysEx-byten), och en riktig .syx-minnesdump går också in.
   Protokollet: docs/midi.md 6.8.  Självtest: lägg till #selftest i URL:en.
 -->
 <style>
@@ -37,7 +43,22 @@
         width: 14px; height: 150px; }
   #master { display: flex; gap: 1.5rem; margin: 1rem 0; }
   .mfad { display: flex; flex-direction: column; align-items: center; }
+  #prog { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+  #prog label { display: flex; gap: .3rem; align-items: center; }
   #prog button, #bar button { font: inherit; padding: .2rem .5rem; }
+  button.danger { color: #b45; }
+  #rew, #rewresult, #sx { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+  #sx label { display: flex; gap: .3rem; align-items: center; }
+  #sx button, #sx input { font: inherit; }
+  #rew label, #rewresult label { display: flex; gap: .3rem; align-items: center; }
+  #rewresult[hidden] { display: none; }
+  #rewresult { margin-top: .5rem; padding: .5rem; border: 1px solid #8884;
+               border-radius: 3px; background: #8881; }
+  #rewamt { width: 12rem; }
+  #rewhelp { max-width: 46rem; margin: .5rem 0; opacity: .85; }
+  #rewhelp summary { cursor: pointer; }
+  #rewhelp pre { overflow-x: auto; background: #8881; padding: .5rem;
+                 border-radius: 3px; font-size: 11px; }
   .note { opacity: .7; max-width: 46rem; margin-top: 1rem; }
   .warn { color: #b45; }
   h2 { font-size: .95rem; margin: 1.5rem 0 .3rem; }
@@ -65,7 +86,6 @@
   <button id="sendall">Skriv GEQ + PEQ</button>
   <button id="fetch">Hämta från enheten</button>
   <button id="zero">Nolla alla band</button>
-  <label>REW-JSON <input id="file" type="file" accept=".json"></label>
   <span id="status">ingen MIDI</span>
 </div>
 
@@ -73,7 +93,7 @@
 <div id="legend">
   <span><i style="color:var(--l)"></i>vänster (redigeras)</span>
   <span><i style="color:var(--r)"></i>höger (redigeras)</span>
-  <span><i style="border-top-style:dashed;opacity:.8"></i>enheten (hämtad)</span>
+  <span><i style="border-top-style:dashed;opacity:.8"></i>enheten / valt program</span>
 </div>
 
 <div id="eq"></div>
@@ -92,12 +112,93 @@
     "Skriv GEQ + PEQ".</span>
 </div>
 
-<div id="prog">
-  Program <input id="progn" type="number" min="0" max="99" value="0">
-  <button id="progget">Byt program</button>
-  <span class="note">Byter minnesplats på enheten (Program Change). Hämta
-    efteråt för att se vad som ligger där.</span>
+<h2>Importera från REW</h2>
+<div id="rew">
+  <label>REW-JSON <input id="file" type="file" accept=".json"></label>
+  <label>Läge
+    <select id="rewmode">
+      <option value="replace">Ersätt nuvarande EQ – mätning UTAN EQ i kedjan</option>
+      <option value="merge">Merga med nuvarande EQ – mätning MED EQ i kedjan</option>
+      <option value="sysex" id="rewsxopt">Merga mot importerad SysEx-fil</option>
+    </select>
+  </label>
+  <label>Andel av förslaget
+    <input id="rewamt" type="range" min="0" max="100" step="5" value="100">
+    <b id="rewamtv">100 %</b>
+  </label>
+  <span class="note"><b>0 % = ingen ändring alls</b>, 100 % = hela REW-förslaget
+    (<b>störst förändring</b>). Vid merge: 50 % tar halva felet per varv och är
+    stabilt – hela steget kan svänga över. <b>Merga mot importerad SysEx-fil</b>
+    lägger förslaget ovanpå den exporterade filens EQ i stället för reglagen –
+    använd den när filen är exakt det som satt på enheten under mätningen.</span>
 </div>
+<div id="rewresult" hidden>
+  <span id="rewsum"></span>
+  <button id="rewwrite">Skriv till DSP</button>
+  <button id="rewundo">Ångra</button>
+</div>
+<details id="rewhelp">
+  <summary>Hur får jag ut datan ur REW? (panelen har inget REW-API ännu)</summary>
+  <p>Panelen läser filen <b>lokalt i webbläsaren</b> – inget skickas någonstans.
+    Formatet är det som <code>python/rew_script.py</code> skriver: mät sweepen i
+    REW, starta REW:s API (Preferences → API → Start server, port 4735) och kör
+    <code>cd python &amp;&amp; ./run.sh</code>. Resultatet hamnar i
+    <code>python/rew_eq_suggestion.json</code> eller
+    <code>python/history/suggestions/</code> – det är den filen du laddar upp här.</p>
+  <p>För hand duger två fält. Nycklarna är ISO-tersbandens frekvenser, gain i dB;
+    PEQ-listan är REW:s filter med <code>q</code> som räknas om till bandbredd i
+    oktaver. Enheten har 3 per kanal, så finns det fler används de 3 viktigaste:
+    <b>smala djupa först</b> – en bred korrigering kan de 31 banden göra själva,
+    en smal rumsmod kan de inte göra alls.</p>
+  <pre>{"graphic_band_gains_db": {"20": -1.5, "25": -0.5, "31.5": 0, "40": 1.0},
+ "peq_filters": [{"frequency": 30.5, "gaindB": -9.2, "q": 2.0}]}</pre>
+  <p><b>Andra varvet:</b> skriv EQ:n till enheten, mät om <i>med</i> EQ:n aktiv,
+    kör REW igen och importera den nya filen med läget <b>Merga</b> – då är
+    förslaget residualen som läggs ovanpå det som redan står i reglagen. Samma
+    sak som <code>./run.sh refine</code> gör i Python-flödet
+    (<code>--refine-damping</code> = den här andelen). Exporterade du EQ:n till
+    fil innan mätningen? Importera filen under <b>SysEx-fil</b> och välj
+    <b>Merga mot …</b> – då räknas residualen mot exakt det läget, oavsett vad
+    reglagen visar nu.</p>
+</details>
+
+<h2>SysEx-fil</h2>
+<div id="sx">
+  <button id="sxexport">Exportera EQ till fil…</button>
+  <label>Importera <input id="sxfile" type="file" accept=".json,.syx"></label>
+  <span class="note" id="sxinfo">Ingen fil importerad.</span>
+</div>
+<p class="note"><b>Exporten</b> är en JSON-fil med de 31 bandens dB, masterfaders,
+  de 6 PEQ-posterna <i>och</i> de exakta SysEx-byten (<code>21</code> = GEQ,
+  <code>22</code> = PEQ) som panelen skulle skicka – läsbar och diffbar, inte
+  enhetens binära dump. <b>Importen</b> tar den filen tillbaka, och även en
+  <b>riktig <code>.syx</code>-minnesdump</b> (t.ex. från <code>run.sh grab</code>
+  eller säkerhetskopian från "Nolla alla program") – då fylls även programlistan.
+  Inget skrivs till enheten vid import; tryck "Skriv GEQ + PEQ" när du vill det.</p>
+
+<h2>Program (minnesplatser 1–100)</h2>
+<div id="prog">
+  <label>Plats <select id="progn"></select></label>
+  <label>Namn <input id="pname" maxlength="12" size="13" placeholder="(tomt)"></label>
+  <button id="progget">Byt till på enheten</button>
+  <button id="progwrite">Skriv till platsen</button>
+  <button id="progzero" class="danger">Nolla platsen</button>
+  <button id="progzeroall" class="danger">Nolla alla program</button>
+</div>
+<p class="note">Listan fylls med programnamnen ur "Hämta från enheten" – välj en
+  plats så laddas dess GEQ, PEQ och namn in i reglagen ovan (kurvan "enheten"
+  visar då den platsen). "Byt till på enheten" skickar Program Change – plats
+  <i>n</i> = Program Change <i>n</i>−1, precis som enhetens display räknar.
+  <br><b>"Skriv till platsen" (SysEx 23) är avkodat ur EQ-Design men ännu inte
+  verifierat mot hårdvara</b> – det skriver över programmet direkt. Hämta först,
+  och hämta igen efteråt för att se att rätt plats ändrades. Arbetsbufferten
+  (plats 0) skrivs med "Skriv GEQ + PEQ" i stället.
+  <br><b>"Nolla platsen"</b> skriver 104 nollbyte till valda platsen – exakt vad
+  enheten själv har i en oanvänd plats (tomt namn, 0 dB, inga filter).
+  <b>"Nolla alla program"</b> gör samma sak med alla 100, ~50 ms isär.
+  Båda frågar först, och massraderingen laddar <b>ner den hämtade dumpen som
+  <code>.syx</code></b> innan den skriver – den filen är enda vägen tillbaka
+  (<code>./run.sh push dumpen.syx</code>, med RCV MEMORY DUMP-knappen).</p>
 
 <h2>Parametriska filter (SysEx 22)</h2>
 <p class="note">Skrivs direkt till arbetsbufferten, samma knapp som GEQ.
@@ -111,7 +212,8 @@
 
 <p class="note">
   <b>Går inte via MIDI:</b> delay, gate, limiter, feedback destroyer, Auto-Q,
-  stereolink, programsparande. Ställ på enheten och spara program där.
+  stereolink. Ställ dem på enheten. (Programsparande: se panelen längst ner –
+  otestad väg.)
   <br>"Hämta från enheten" läser hela minnesdumpen (12 kB, tar ~5 s) och fyller
   reglagen + kolumnen "På enheten". Kräver att enhetens <code>EXCL SND/RCV</code>
   står på ON och att båda MIDI-kablarna sitter i.
@@ -156,36 +258,74 @@ function peqFreqHz(raw) {
   return band >= 30 ? ISO[30] : ISO[band] + (ISO[band + 1] - ISO[band]) * fine / 20;
 }
 
-// 6 poster i ordning L1 R1 L2 R2 L3 R3; null (eller gain 0) = OFF/noll.
-function peqMessage(peqs) {
-  const recs = [];
-  for (const p of peqs) {
-    if (!p || !p.gain_db) { recs.push(0, 0, 0, 0); continue; }
-    const fr = peqFreqRaw(p.freq_hz);
-    recs.push(fr >> 8, fr & 0xFF,
-      Math.max(0, Math.min(119, Math.round(p.bw_oct * 60) - 1)),
-      Math.max(-96, Math.min(32, Math.round(p.gain_db * 2))) & 0xFF);
-  }
-  return [0x22, 0x00, ...pack7([...recs, 0, 0, 0, 0])];
+// En PEQ-post, 4 byte: bandindex, finsteg, bandbredd-1 i 1/60 okt, gain*2.
+// null eller gain 0 = OFF/noll. Samma format i dumpen som i kommando 22.
+function peqRec(p) {
+  if (!p || !p.gain_db) return [0, 0, 0, 0];
+  const fr = peqFreqRaw(p.freq_hz);
+  return [fr >> 8, fr & 0xFF,
+    Math.max(0, Math.min(119, Math.round(p.bw_oct * 60) - 1)),
+    Math.max(-96, Math.min(32, Math.round(p.gain_db * 2))) & 0xFF];
 }
 
-// Avkoda minnesdumpen (F0 00 20 32 dd 01 4F <12104 packade byte> F7).
-// Bitströmmen räknas från fil-offset 11, 7 bitar per byte, MSB först.
-const bitAt = (d, p) => (d[(p / 7) | 0] >> (6 - p % 7)) & 1;
-const readU = (d, p, w) => { let v = 0; for (let i = 0; i < w; i++) v = v << 1 | bitAt(d, p + i); return v; };
+// 6 poster i ordning L1 R1 L2 R2 L3 R3.
+const peqMessage = peqs => [0x22, 0x00, ...pack7([...peqs.flatMap(peqRec), 0, 0, 0, 0])];
+
+// GEQ i dumpen: 0,5 dB per enhet, tecknat (CC-skalan är 0,25 dB - annan sak).
+const geqByte = db => Math.max(-32, Math.min(32, Math.round(db * 2))) & 0xFF;
+
+// Minnesdumpen (F0 00 20 32 dd 01 4F <12104 packade byte> F7) -> minnesbilden
+// på 10591 byte: 8 databyte = 7 minnesbyte, MSB först (EQ-Design 0x403f70).
 const s8 = v => v >= 128 ? v - 256 : v;
-function decodeDump(msg) {
-  const d = msg.slice(11, msg.length - 1);          // hoppa F0 + 10 headerbyte
-  const g = [];
-  for (let n = 0; n < 64; n++) g.push(s8(readU(d, 372 + 8 * n, 8)) * 0.5);
-  const peq = [];
-  for (let k = 0; k < 6; k++) {
-    const b = 84 + 32 * k;
-    const [hi, lo, bw, gn] = [0, 1, 2, 3].map(i => readU(d, b + 8 * i, 8));
-    peq.push({ freq_hz: peqFreqHz(hi << 8 | lo), bw_oct: (bw + 1) / 60,
-               gain_db: s8(gn) / 2, on: !!(hi | lo | bw | gn) });
+function unpack7(packed) {
+  const out = new Uint8Array((packed.length * 7) >> 3);
+  for (let i = 0; i < out.length; i++) {
+    let v = 0;
+    for (let b = 0; b < 8; b++) {
+      const pos = i * 8 + b;
+      v = v << 1 | (packed[(pos / 7) | 0] >> (6 - pos % 7)) & 1;
+    }
+    out[i] = v;
   }
-  return { L: g.slice(0, 31), mL: g[31], R: g.slice(32, 63), mR: g[63], peq };
+  return out;
+}
+const unpackImage = msg => unpack7(msg.slice(7, msg.length - 1));
+
+// Program 0 = arbetsbufferten på minnesbyte 10, program 1-100 på 190 + 104*(n-1).
+const PROG_LEN = 104;
+const progBase = n => n ? 190 + PROG_LEN * (n - 1) : 10;
+
+// Ett program, 104 byte: delay L, delay R (16 bit), 6 PEQ-poster à 4 byte,
+// namn 12 tecken (ASCII - 0x20), GEQ L 32 byte, GEQ R 32 byte (band + master).
+function decodeProgram(img, n) {
+  const o = progBase(n);
+  const peq = [...Array(6)].map((_, k) => {
+    const [hi, lo, bw, gn] = img.slice(o + 4 + 4 * k, o + 8 + 4 * k);
+    return { freq_hz: peqFreqHz(hi << 8 | lo), bw_oct: (bw + 1) / 60,
+             gain_db: s8(gn) / 2, on: !!(hi | lo | bw | gn) };
+  });
+  const g = [...Array(64)].map((_, i) => s8(img[o + 40 + i]) * 0.5);
+  return { name: String.fromCharCode(...[...img.slice(o + 28, o + 40)].map(c => c + 0x20)),
+           L: g.slice(0, 31), mL: g[31], R: g.slice(32, 63), mR: g[63], peq };
+}
+
+// Programmets 104 byte: basen behålls (delay m.m.), namn/PEQ/GEQ patchas in.
+function programBytes(base, p) {
+  const b = [...base];
+  const name = (p.name || '').toUpperCase().padEnd(12).slice(0, 12);
+  for (let i = 0; i < 12; i++) b[28 + i] = (name.charCodeAt(i) - 0x20) & 0xFF;
+  p.peq.flatMap(peqRec).forEach((v, i) => b[4 + i] = v);
+  [...p.L, p.mL, ...p.R, p.mR].forEach((db, i) => b[40 + i] = geqByte(db));
+  return b;
+}
+
+// EQ-Design:s kommando 23: ett helt program till plats 1-100 (prognummer
+// 0-baserat, som 21/33). Avkodat ur EQDESIGN.EXE, ej verifierat mot enheten.
+const programMessage = (n, bytes) => [0x23, n - 1, ...pack7(bytes)];
+
+function decodeDump(msg) {
+  const img = unpackImage(msg);
+  return { img, ...decodeProgram(img, 0) };
 }
 
 // Peaking-filtrets magnitud i dB (analog RBJ). Bandbredd i oktaver -> Q.
@@ -206,8 +346,65 @@ function geqDbAt(f, bands) {
   const t = Math.log(f / ISO[i]) / Math.log(ISO[i + 1] / ISO[i]);
   return bands[i] + (bands[i + 1] - bands[i]) * t;
 }
+// REW-import: de 31 bandvärdena ur ett förslag (graphic_band_gains_db).
+// amount = hur stor del av förslaget som appliceras (0-1).
+// merge = mätningen gjordes MED EQ:n i kedjan, så förslaget är residualen som
+// läggs ovanpå nuvarande värden - samma räkning som rew_script.py --refine,
+// där amount är --refine-damping. Enhetens steg: 0,5 dB, klippt till ±16 dB.
+const num = v => Number.isFinite(+v) ? +v : 0;
+const rewBands = (gains, current, amount, merge) => ISO.map((hz, i) => {
+  const sug = num(gains[hz]) * amount;
+  return Math.max(-16, Math.min(16, Math.round((merge ? current[i] + sug : sug) * 2) / 2));
+});
+
 const qToOct = q => Math.asinh(1 / (2 * q)) * 2 / Math.LN2;
 const octToQ = o => 1 / (2 * Math.sinh(Math.LN2 / 2 * o));
+
+// Rankning när REW föreslår fler filter än enhetens 3 (dsp8000.filter_priority):
+// |gain| viktat med hur mycket smalare filtret är än ett 1/3-oktavsband. Smala
+// djupa rumsmoder först - breda korrigeringar klarar de 31 banden själva.
+const Q_THIRD_OCTAVE = octToQ(1 / 3);
+const filterPriority = (gainDb, q) =>
+  Math.abs(num(gainDb)) * Math.max(1, num(q) / Q_THIRD_OCTAVE);
+
+// --- filformat för export/import av EQ:n ---
+// Egen JSON, inte enhetens binära dump: läsbar, diffbar och lätt att skriva för
+// hand. Bär både de avkodade värdena och de exakta SysEx-byten (21 = GEQ,
+// 22 = PEQ) som panelen skulle skicka, så filen är en ärlig "exporterad sysex".
+const EQ_FORMAT = 'dsp8000-eq-1';
+const hex = bytes => bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+
+function stateToFile(st, sysex) {
+  return {
+    format: EQ_FORMAT,
+    exported_at: new Date().toISOString(),
+    name: st.name || '',
+    master_l_db: st.mL, master_r_db: st.mR,
+    geq_l_db: st.L, geq_r_db: st.R,
+    peq: PEQ_LABELS.map((label, k) => ({ label, ...st.peq[k] })),
+    sysex: sysex || {},
+  };
+}
+
+// -> {name, L, R, mL, mR, peq} eller null om filen inte är vårt format.
+// Värdena klipps till enhetens intervall - filen är en indata utifrån.
+function fileToState(obj) {
+  const band = a => Array.isArray(a) && a.length === 31
+    ? a.map(v => Math.max(-16, Math.min(16, num(v)))) : null;
+  if (!obj || obj.format !== EQ_FORMAT) return null;
+  const L = band(obj.geq_l_db), R = band(obj.geq_r_db);
+  if (!L || !R) return null;
+  const peq = PEQ_LABELS.map((_, k) => {
+    const f = (obj.peq || [])[k] || {};
+    const gain = Math.max(-48, Math.min(16, num(f.gain_db)));
+    return { freq_hz: Math.max(20, Math.min(20000, num(f.freq_hz) || 1000)),
+             bw_oct: Math.max(1 / 60, Math.min(2, num(f.bw_oct) || 1)),
+             gain_db: gain, on: !!gain };
+  });
+  return { name: String(obj.name || ''), L, R, peq,
+           mL: Math.max(-16, Math.min(16, num(obj.master_l_db))),
+           mR: Math.max(-16, Math.min(16, num(obj.master_r_db))) };
+}
 // --- slut kodning ---
 
 const $ = id => document.getElementById(id);
@@ -221,10 +418,36 @@ const midiCh = () => Math.max(0, Math.min(15, ($('ch').value | 0) - 1));
 function sendCC(cc, val) {
   if (out) out.send([0xB0 | midiCh(), cc & 127, val & 127]);
 }
+const frame = payload => [0xF0, 0x00, 0x20, 0x32, midiCh(), 0x01, ...payload, 0xF7];
 function sendSysex(payload) {
   if (!out) { flash('ingen utport'); return false; }
-  out.send([0xF0, 0x00, 0x20, 0x32, midiCh(), 0x01, ...payload, 0xF7]);
+  out.send(frame(payload));
   return true;
+}
+
+// Spara en fil: filväljare där den finns (Chrome/Edge), annars nedladdning.
+// Väljaren måste öppnas i klicket, så anropa den först i en knapphanterare.
+async function saveFile(name, data, type = 'application/json') {
+  if (window.showSaveFilePicker) {
+    let h;
+    try {
+      h = await window.showSaveFilePicker({ suggestedName: name });
+    } catch (e) {
+      if (e.name === 'AbortError') return null;      // användaren avbröt
+      h = null;                                      // annat fel: fall tillbaka
+    }
+    if (h) {
+      const w = await h.createWritable();
+      await w.write(data);
+      await w.close();
+      return h.name;
+    }
+  }
+  const a = document.createElement('a');
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);   // för tidigt = avbruten nedladdning
+  return name;
 }
 function flash(msg) {
   $('status').textContent = msg;
@@ -313,9 +536,99 @@ for (const ch of ['L', 'R']) {
   });
 }
 
-$('progget').onclick = () => {
-  if (out) out.send([0xC0 | midiCh(), Math.max(0, Math.min(99, +$('progn').value))]);
+// --- program (minnesplatser) ---
+let img = null, dumpRaw = null;      // senaste hämtade minnesbilden + råa dumpen
+const progNo = () => +$('progn').value;
+
+function fillProgList() {
+  const keep = $('progn').value;
+  $('progn').innerHTML = ['<option value="0">0 – arbetsbufferten</option>']
+    .concat([...Array(100)].map((_, i) => {
+      const n = i + 1, nm = img ? decodeProgram(img, n).name.trim() : '';
+      return `<option value="${n}">${n}${nm ? ' – ' + nm : ''}</option>`;
+    })).join('');
+  $('progn').value = keep || '0';
+}
+
+// Lägg ett program i reglagen; det blir också "enheten"-kurvan.
+function showProgram(p) {
+  device = p;
+  const src = $('mode').value === 'R' ? p.R : p.L;
+  src.forEach((db, i) => { $('s' + i).value = db; $('d' + i).textContent = db.toFixed(1); });
+  $('mL').value = dbToCc(p.mL); $('mLv').textContent = p.mL.toFixed(2);
+  $('mR').value = dbToCc(p.mR); $('mRv').textContent = p.mR.toFixed(2);
+  $('pname').value = p.name.trim();
+  p.peq.forEach((f, k) => {
+    $('pd' + k).textContent = f.on
+      ? `${f.freq_hz.toFixed(0)} Hz / ${f.bw_oct.toFixed(2)} okt / ${f.gain_db.toFixed(1)} dB`
+      : 'OFF';
+    if (f.on) setPeqRow(k, f);
+  });
+  draw();
+  save();
+}
+
+$('progn').onchange = () => {
+  if (!img) { flash('hämta från enheten först'); return; }
+  showProgram(decodeProgram(img, progNo()));
+  flash(progNo() ? `visar program ${progNo()}` : 'visar arbetsbufferten');
 };
+
+$('progget').onclick = () => {
+  if (!progNo()) { flash('plats 0 är arbetsbufferten – välj 1–100'); return; }
+  if (out) out.send([0xC0 | midiCh(), progNo() - 1]);   // display 1–100 = PC 0–99
+};
+
+$('progwrite').onclick = () => {
+  const n = progNo();
+  if (!img) { flash('hämta från enheten först – programmets övriga byte behålls'); return; }
+  if (!n) { flash('arbetsbufferten skrivs med "Skriv GEQ + PEQ"'); return; }
+  const old = decodeProgram(img, n).name.trim() || 'tomt';
+  if (!confirm(`Skriv över program ${n} (${old}) med reglagen just nu?`)) return;
+  const c = channels();
+  const base = [...img.slice(progBase(n), progBase(n) + PROG_LEN)];
+  const bytes = programBytes(base, {
+    name: $('pname').value, L: c.L, R: c.R,
+    mL: ccToDb(+$('mL').value), mR: ccToDb(+$('mR').value), peq: peqRows(),
+  });
+  if (sendSysex(programMessage(n, bytes)))
+    flash(`skrev program ${n} (23) – hämta igen och kontrollera`);
+};
+
+// Ett nollat program = 104 nollbyte, precis som enhetens oanvända platser.
+const ZERO_PROG = Array(PROG_LEN).fill(0);
+
+$('progzero').onclick = () => {
+  const n = progNo();
+  if (!n) { flash('plats 0 är arbetsbufferten – använd "Nolla alla band"'); return; }
+  const old = img ? decodeProgram(img, n).name.trim() || 'tomt' : 'okänt';
+  if (!confirm(`Nolla program ${n} (${old})?`)) return;
+  if (sendSysex(programMessage(n, ZERO_PROG)))
+    flash(`nollade program ${n} (23) – hämta igen och kontrollera`);
+};
+
+$('progzeroall').onclick = () => {
+  if (!img) { flash('hämta från enheten först – dumpen är enda vägen tillbaka'); return; }
+  if (!out) { flash('ingen utport'); return; }
+  const named = [...Array(100)].filter((_, i) => decodeProgram(img, i + 1).name.trim()).length;
+  if (!confirm(`Nolla ALLA 100 program (${named} namngivna försvinner)?\n\n`
+    + 'Den hämtade dumpen laddas ner som .syx först – den är enda vägen '
+    + 'tillbaka (./run.sh push, med RCV MEMORY DUMP-knappen).')) return;
+  saveDump();
+  // ponytail: 50 ms isär via Web MIDI:s tidsstämplar - enheten fick aldrig 100
+  // SysEx i rad förut. Öka om platser hoppas över.
+  for (let n = 1; n <= 100; n++)
+    out.send([0xF0, 0x00, 0x20, 0x32, midiCh(), 0x01,
+              ...programMessage(n, ZERO_PROG), 0xF7], performance.now() + n * 50);
+  img = null; dumpRaw = null; fillProgList();   // listan vet inte längre vad som står där
+  flash('nollade 100 program (23) – hämta igen för att se resultatet');
+};
+
+// Backup: den hämtade dumpen som .syx, pushbar med ./run.sh push.
+function saveDump() {
+  saveFile(`dsp8000-dump-${new Date().toISOString().slice(0, 19).replace(/[:T-]/g, '')}.syx`,
+           new Uint8Array(dumpRaw), 'application/octet-stream');
+}
 
 // --- hämta ---
 let fetchTimer = null;
@@ -333,22 +646,17 @@ $('fetch').onclick = () => {
 function onDump(bytes) {
   clearTimeout(fetchTimer);
   $('status').className = '';
-  device = decodeDump(bytes);
-  const src = $('mode').value === 'R' ? device.R : device.L;
-  src.forEach((db, i) => { $('s' + i).value = db; $('d' + i).textContent = db.toFixed(1); });
-  $('mL').value = dbToCc(device.mL); $('mLv').textContent = device.mL.toFixed(2);
-  $('mR').value = dbToCc(device.mR); $('mRv').textContent = device.mR.toFixed(2);
-  device.peq.forEach((f, k) => {
-    $('pd' + k).textContent = f.on
-      ? `${f.freq_hz.toFixed(0)} Hz / ${f.bw_oct.toFixed(2)} okt / ${f.gain_db.toFixed(1)} dB`
-      : 'OFF';
-    if (f.on) setPeqRow(k, f);
-  });
-  const diff = device.L.some((v, i) => v !== device.R[i]);
-  flash('hämtade dumpen' + (diff ? ' – L och R skiljer sig, reglagen visar '
-    + ($('mode').value === 'R' ? 'R' : 'L') : ''));
-  draw();
-  save();
+  const d = decodeDump(bytes);
+  img = d.img;
+  dumpRaw = bytes;
+  $('progn').value = '0';
+  fillProgList();
+  showProgram(d);
+  const diff = d.L.some((v, i) => v !== d.R[i]);
+  const named = [...Array(100)].filter((_, i) => decodeProgram(img, i + 1).name.trim()).length;
+  flash(`hämtade dumpen, ${named} namngivna program`
+    + (diff ? ' – L och R skiljer sig, reglagen visar '
+       + ($('mode').value === 'R' ? 'R' : 'L') : ''));
 }
 
 // --- kurvan ---
@@ -393,29 +701,148 @@ function draw() {
   curve(c.R, peq.filter((_, k) => k % 2 === 1), '#e08a3c');
 }
 
-// --- REW-JSON ---
+// --- SysEx-fil: export och import ---
+let sysexState = null;               // senast importerade filen, bas för läge 3
+
+const editorState = () => {
+  const c = channels();
+  return { name: $('pname').value.trim(), L: c.L, R: c.R,
+           mL: ccToDb(+$('mL').value), mR: ccToDb(+$('mR').value), peq: peqRows() };
+};
+
+$('sxexport').onclick = async () => {
+  const st = editorState();
+  const file = stateToFile(st, {
+    geq_21: hex(frame(geqMessage(st.L, st.R, st.mL, st.mR))),
+    peq_22: hex(frame(peqMessage(st.peq))),
+  });
+  const name = `dsp8000-eq-${new Date().toISOString().slice(0, 19).replace(/[:T-]/g, '')}.json`;
+  const saved = await saveFile(name, JSON.stringify(file, null, 2));
+  flash(saved ? 'exporterade ' + saved : 'exporten avbröts');
+};
+
+$('sxfile').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (!f) return;
+  e.target.value = '';
+  const buf = new Uint8Array(await f.arrayBuffer());
+  let st = null;
+  if (buf[0] === 0xF0) {
+    // riktig minnesdump från enheten (F0 00 20 32 dd 01 4F …): programlistan med
+    if (buf.length < 1000 || buf[6] !== 0x4F) {
+      flash('SysEx-filen är inte en minnesdump (4F) – exportera från panelen i stället');
+      return;
+    }
+    const d = decodeDump(buf);
+    img = d.img; dumpRaw = buf; fillProgList();
+    st = d;
+  } else {
+    let obj;
+    try { obj = JSON.parse(new TextDecoder().decode(buf)); } catch (err) {
+      flash('varken .syx eller JSON: ' + err.message); return;
+    }
+    st = fileToState(obj);
+    if (!st) { flash(`fel format – väntade {"format":"${EQ_FORMAT}", geq_l_db: [31 värden] …}`); return; }
+  }
+  sysexState = st;
+  $('sxinfo').textContent = `Importerad: ${f.name}`;
+  $('rewsxopt').textContent = `Merga mot ${f.name}`;
+  showProgram(st);                    // fyller reglagen och blir "enheten"-kurvan
+  flash(`importerade ${f.name} – inget skrivet till enheten`);
+});
+
+// --- REW-import ---
+// Ersätt: banden = förslaget * andelen. Merga: nuvarande + förslaget * andelen
+// (mätningen är gjord MED EQ:n på, så förslaget är residualen ovanpå den) -
+// samma räkning som rew_script.py --refine, där andelen är --refine-damping.
+let rewData = null, rewName = '', rewSnap = null;
+const hzText = f => f >= 1000 ? f / 1000 + ' kHz' : f + ' Hz';
+const setBand = (i, db) => { $('s' + i).value = db; $('d' + i).textContent = db.toFixed(1); };
+const snapshot = () => ({ bands: bandDb(), peq: peqRows() });
+
+function applySnapshot(st) {
+  st.bands.forEach((v, i) => setBand(i, +v));
+  st.peq.forEach((f, k) => setPeqRow(k, f));
+}
+
+function applyRew() {
+  if (!rewData) return;
+  if ($('rewmode').value === 'sysex' && !sysexState) {
+    flash('importera en SysEx-fil först – mergar mot reglagen så länge');
+    $('rewmode').value = 'merge';
+  }
+  const amt = +$('rewamt').value / 100, mode = $('rewmode').value;
+  const merge = mode !== 'replace';
+  // Basen att lägga förslaget ovanpå: reglagen före importen, eller den
+  // importerade filen när den (och inte reglagen) var det som satt på enheten.
+  const fromFile = mode === 'sysex';
+  const base = fromFile
+    ? ($('mode').value === 'R' ? sysexState.R : sysexState.L)
+    : rewSnap.bands;
+  const bands = rewBands(rewData.graphic_band_gains_db || {}, base, amt, merge);
+  bands.forEach((db, i) => setBand(i, db));
+  // Filens PEQ hör ihop med dess band - de satt i kedjan under mätningen.
+  if (fromFile) {
+    sysexState.peq.forEach((f, k) => setPeqRow(k, f));
+    $('mL').value = dbToCc(sysexState.mL); $('mLv').textContent = sysexState.mL.toFixed(2);
+    $('mR').value = dbToCc(sysexState.mR); $('mRv').textContent = sysexState.mR.toFixed(2);
+  }
+  // PEQ ersätts bara när hela EQ:n ersätts. Vid merge satt filtren redan i
+  // kedjan under mätningen, och enheten har bara 3 per kanal att stapla i -
+  // samma val som rew_script.py --refine ("PEQ-listan följer med oförändrad").
+  if (!merge) {
+    const top = (rewData.peq_filters || []).slice()
+      .sort((a, b) => filterPriority(b.gaindB, b.q) - filterPriority(a.gaindB, a.q)).slice(0, 3);
+    PEQ_LABELS.forEach((_, k) => {
+      const f = top[k >> 1];
+      setPeqRow(k, f ? { freq_hz: num(f.frequency) || 1000, bw_oct: qToOct(num(f.q) || 1),
+                         gain_db: num(f.gaindB) * amt }
+                     : { freq_hz: 1000, bw_oct: 1, gain_db: 0 });
+    });
+  }
+  const d = bands.map((v, i) => v - rewSnap.bands[i]);
+  const mean = d.reduce((a, x) => a + Math.abs(x), 0) / d.length;
+  const worst = d.reduce((a, x, i) => Math.abs(x) > Math.abs(d[a]) ? i : a, 0);
+  $('rewsum').innerHTML = `<b>${rewName}</b>: snittförändring `
+    + `<b>${(mean / 16 * 100).toFixed(0)} %</b> av ±16 dB (${mean.toFixed(1)} dB per band), `
+    + `störst ${d[worst] >= 0 ? '+' : ''}${d[worst].toFixed(1)} dB vid ${hzText(ISO[worst])}. `
+    + (fromFile ? 'GEQ, PEQ och master tagna ur SysEx-filen, förslaget ovanpå banden.'
+       : merge ? 'PEQ orörda (mätningen gjordes med dem på).'
+       : 'PEQ ersatta av REW:s 3 viktigaste (smala djupa först), samma på L och R.');
+  draw();
+  save();
+}
+
 $('file').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
-  const data = JSON.parse(await f.text());
-  const gb = data.graphic_band_gains_db || {};
-  ISO.forEach((hz, i) => {
-    if (gb[hz] == null) return;
-    const db = Math.max(-16, Math.min(16, gb[hz]));
-    $('s' + i).value = db; $('d' + i).textContent = db.toFixed(1);
-  });
-  // 3 starkaste filtren, samma på L och R (enheten länkar inte PEQ)
-  const top = (data.peq_filters || []).slice()
-    .sort((a, b) => Math.abs(b.gaindB || 0) - Math.abs(a.gaindB || 0)).slice(0, 3);
-  PEQ_LABELS.forEach((_, k) => {
-    const f = top[k >> 1];
-    setPeqRow(k, f
-      ? { freq_hz: f.frequency || 1000, bw_oct: qToOct(f.q || 1), gain_db: f.gaindB || 0 }
-      : { freq_hz: 1000, bw_oct: 1, gain_db: 0 });
-  });
-  flash(`laddade ${f.name} – tryck "Skriv GEQ + PEQ"`);
-  draw(); save();
-  e.target.value = '';   // så samma fil kan laddas om
+  e.target.value = '';                     // så samma fil kan laddas om
+  let data;
+  try { data = JSON.parse(await f.text()); } catch (err) { flash('trasig JSON: ' + err.message); return; }
+  if (!data || typeof data !== 'object' || (!data.graphic_band_gains_db && !data.peq_filters)) {
+    flash('hittar varken graphic_band_gains_db eller peq_filters i filen');
+    return;
+  }
+  rewData = data; rewName = f.name;
+  rewSnap = snapshot();                    // ångra-punkten: läget före importen
+  $('rewresult').hidden = false;
+  applyRew();
+  flash(`importerade ${f.name} – inget skrivet till enheten än`);
 });
+
+for (const id of ['rewmode', 'rewamt'])
+  $(id).addEventListener('input', () => {
+    $('rewamtv').textContent = $('rewamt').value + ' %';
+    applyRew();                            // räknas alltid från ångra-punkten
+  });
+
+$('rewwrite').onclick = sendAll;
+$('rewundo').onclick = () => {
+  if (!rewSnap) return;
+  applySnapshot(rewSnap);
+  rewData = null;
+  $('rewresult').hidden = true;
+  draw(); save();
+  flash('ångrade importen – enheten har kvar det som senast skrevs');
+};
 
 // --- localStorage: överlever refresh, skickar inget ---
 const KEY = 'dsp8000_gui';
@@ -425,10 +852,12 @@ function save() {
       bands: bandDb(), peq: peqRows(),
       mL: +$('mL').value, mR: +$('mR').value, mode: $('mode').value,
       ch: $('ch').value, offset: $('offset').value, progn: $('progn').value,
+      pname: $('pname').value, rewmode: $('rewmode').value, rewamt: $('rewamt').value,
     }));
   } catch (e) {}
 }
 function restore() {
+  fillProgList();
   let st; try { st = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
   if (st) {
     (st.bands || []).forEach((v, i) => {
@@ -436,10 +865,11 @@ function restore() {
       $('s' + i).value = v; $('d' + i).textContent = (+v).toFixed(1);
     });
     (st.peq || []).forEach((f, k) => $('pf' + k) && setPeqRow(k, f));
-    for (const k of ['mL', 'mR', 'mode', 'ch', 'offset', 'progn'])
+    for (const k of ['mL', 'mR', 'mode', 'ch', 'offset', 'progn', 'pname', 'rewmode', 'rewamt'])
       if (st[k] != null) $(k).value = st[k];
   }
   for (const ch of ['L', 'R']) $('m' + ch + 'v').textContent = ccToDb(+$('m' + ch).value).toFixed(2);
+  $('rewamtv').textContent = $('rewamt').value + ' %';
   draw();
 }
 document.addEventListener('change', save);
@@ -501,6 +931,42 @@ function selftest() {
   ok('peqMessage OFF', peqMessage(PEQ_LABELS.map(() => null)).slice(2).every(v => v === 0), true);
   ok('peakDb i mitten', +peakDb(1000, 1000, 1, -6).toFixed(6), -6);
   ok('qToOct/octToQ', +octToQ(qToOct(1.41)).toFixed(6), 1.41);
+  ok('unpack7(pack7)', [...unpack7(pack7([1, 2, 3, 255, 0, 128, 64]))], [1, 2, 3, 255, 0, 128, 64]);
+  ok('programMessage längd', programMessage(1, Array(104).fill(0)).length, 122);
+  ok('programMessage prognr', programMessage(10, Array(104).fill(0))[1], 9);
+  ok('nollat program', programMessage(50, Array(104).fill(0)).slice(2).every(v => v === 0), true);
+  const sug = { 20: -4, 25: 3.3, 1000: 40 }, cur = ISO.map((_, i) => i === 0 ? 2 : 0);
+  ok('rew ersätt 100 %', rewBands(sug, cur, 1, false).slice(0, 2), [-4, 3.5]);
+  ok('rew ersätt 50 %', rewBands(sug, cur, 0.5, false).slice(0, 2), [-2, 1.5]);
+  ok('rew merga 50 %', rewBands(sug, cur, 0.5, true).slice(0, 2), [0, 1.5]);
+  ok('rew 0 % ändrar inget', rewBands(sug, cur, 0, true), cur);
+  ok('rew klipper ±16', rewBands(sug, cur, 1, false)[17], 16);
+  ok('rew band som saknas', rewBands(sug, cur, 1, true)[5], cur[5]);
+  ok('Q för 1/3 oktav', +Q_THIRD_OCTAVE.toFixed(3), 4.318);
+  ok('smal djup slår bred', filterPriority(-6, 12) > filterPriority(-8, 1), true);
+  const st = { name: 'FIL', L: ISO.map((_, i) => (i % 7) - 3), R: ISO.map(() => 2), mL: -1.5, mR: 0,
+               peq: [{ freq_hz: 63, bw_oct: 0.1, gain_db: -6, on: true },
+                     ...Array(5).fill({ freq_hz: 1000, bw_oct: 1, gain_db: 0, on: false })] };
+  const file = fileToState(stateToFile(st, {}));
+  ok('fil roundtrip GEQ', [file.L, file.R, file.mL, file.mR], [st.L, st.R, st.mL, st.mR]);
+  ok('fil roundtrip namn', file.name, 'FIL');
+  ok('fil roundtrip PEQ', [file.peq[0].freq_hz, file.peq[0].gain_db, file.peq[1].on], [63, -6, false]);
+  ok('fil fel format', fileToState({ format: 'nåt annat' }), null);
+  ok('fil trasiga band', fileToState({ format: EQ_FORMAT, geq_l_db: [1, 2] }), null);
+  ok('bred slår smal och grund', filterPriority(-8, 1) > filterPriority(-1, 12), true);
+  // program: koda -> lägg i en minnesbild -> avkoda tillbaka
+  const prg = { name: 'test', L: ISO.map((_, i) => (i % 5) - 2), mL: 1.5,
+                R: ISO.map(() => -3), mR: 0,
+                peq: [{ freq_hz: 250, bw_oct: 1 / 3, gain_db: -6 }, null, null, null, null, null] };
+  const testImg = new Uint8Array(200);
+  programBytes(Array(104).fill(0), prg).forEach((v, i) => testImg[10 + i] = v);
+  const back = decodeProgram(testImg, 0);
+  ok('program GEQ', back.L, prg.L);
+  ok('program master', [back.mL, back.mR], [1.5, 0]);
+  ok('program namn', back.name, 'TEST        ');
+  ok('program PEQ', [back.peq[0].freq_hz, +back.peq[0].bw_oct.toFixed(4), back.peq[0].gain_db],
+     [250, 0.3333, -6]);
+  ok('program PEQ av', back.peq[1].on, false);
   $('status').className = bad.length ? 'warn' : '';
   $('status').textContent = bad.length ? bad.join(' | ') : 'självtest OK';
   document.title = bad.length ? 'SJÄLVTEST FEL' : 'självtest OK';

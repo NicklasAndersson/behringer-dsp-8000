@@ -14,7 +14,9 @@ vad som fungerar, hur, och vad som fortfarande är okänt.
 
 **▶ [Öppna kontrollpanelen i webbläsaren](https://nicklasandersson.github.io/behringer-dsp-8000/)** – kräver bara Chrome eller
 Edge och ett MIDI-interface: 31-bands grafisk EQ, de parametriska filtren,
-avläsning av enhetens minne och kurvvisning, direkt via Web MIDI. Ingen
+avläsning av enhetens minne, de 100 programmen med namn, import av REW-förslag
+(ersätt, merga mot reglagen eller mot en exporterad fil, med valbar andel),
+export/import av EQ:n som fil och kurvvisning, direkt via Web MIDI. Ingen
 installation, inget konto, inget som lämnar datorn.
 
 | | |
@@ -36,8 +38,9 @@ byte-level reference, the test log and what remains unknown are in
 [docs/midi.md](docs/midi.md). The repo also contains scripts that drive Room EQ
 Wizard's HTTP API to produce a room correction and push it to the unit
 ([docs/rew.md](docs/rew.md), [docs/verktyg.md](docs/verktyg.md)). A browser
-control panel – graphic EQ, parametric filters, memory readback and a response
-curve over Web MIDI – runs at **[https://nicklasandersson.github.io/behringer-dsp-8000/](https://nicklasandersson.github.io/behringer-dsp-8000/)**, no install needed (Chrome or
+control panel – graphic EQ, parametric filters, memory readback, the 100
+program slots by name, REW correction import, file-based EQ export/import and a
+response curve over Web MIDI – runs at **[https://nicklasandersson.github.io/behringer-dsp-8000/](https://nicklasandersson.github.io/behringer-dsp-8000/)**, no install needed (Chrome or
 Edge). Everything except this summary is in Swedish.
 
 **Auf Deutsch:** Dieses Repository dokumentiert die MIDI-Implementierung eines
@@ -50,7 +53,8 @@ zurückschreiben und setzt beide auf einmal. Die Byte-Referenz, das Testprotokol
 und die offenen Fragen stehen in [docs/midi.md](docs/midi.md). Dazu kommen
 Skripte, die über die HTTP-API von Room EQ Wizard eine Raumkorrektur erzeugen
 und an das Gerät schicken ([docs/rew.md](docs/rew.md),
-[docs/verktyg.md](docs/verktyg.md)). Alles außer dieser Zusammenfassung ist auf
+[docs/verktyg.md](docs/verktyg.md)). Das Browser-Bedienfeld zeigt außerdem die
+100 Speicherplätze mit Namen. Alles außer dieser Zusammenfassung ist auf
 Schwedisch.
 
 ---
@@ -271,7 +275,7 @@ tillsammans med det Gemini-rapporten påstår men inte kan belägga.
 - ~~**Röd overflow-LED efter en skrivning.**~~ **Förklarad 2026-09-03:** GEQ-blocket
   låg en bit fel i `patch_dump`, så varje sänkning skrevs som en stor höjning
   (−1 dB blev +63 dB, 28 av 62 band över +16 dB). Rättat och låst av ett test
-  mot hårdvarudumpen `dumps/dsp8000_sysex_edges.syx`. Skrivningen efter
+  mot hårdvarudumpen `python/dumps/dsp8000_sysex_edges.syx`. Skrivningen efter
   rättelsen landade bit för bit och gav sund EQ (alla band inom ±16 dB).
 - ~~**NY BUGG 12:52: PEQ-frekvensen på displayen stämmer bara för post 0.**~~
   **Förklarad och rättad samma dag (68d0637):** vår PEQ-post låg tre bitar
@@ -372,6 +376,17 @@ körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlo
   bekräftade 2026-09-03**. Kvar: `raw 15 00` ska ge en `11`-RTA-ram;
   `raw 20 00` + 16 packade byte (huvud + delay) och `raw 23 <prog>` + 120
   packade byte (ett helt program).
+- [ ] **`23` – skriva ett helt program (presets).** Kontrollpanelen har knappen
+  ("Skriv till platsen", [docs/verktyg.md](docs/verktyg.md#dsp8000_guihtml--manuell-kontroll-utan-rew))
+  men kommandot är bara avkodat, aldrig kört. Testa på en **tom** plats: hämta,
+  välj t.ex. plats 50, sätt ett känt namn och en känd kurva, skriv, hämta igen.
+  Landade det på plats 50 (prognummer 0-baserat) eller 51 (1-baserat)? Syns
+  namnet i enhetens Program Load-lista? Krävs knapptryck, som för `4F`? Vad gör
+  PROTECT MEM ON? Skriv in svaret i [docs/midi.md 6.8](docs/midi.md#68-eq-design-protokollet-ur-eqdesignexe-2026-09-03).
+  Först när enskild skrivning är bekräftad är panelens "Nolla alla program"
+  (100 × `23`, ~50 ms isär) meningsfull att prova – och då med den nedladdade
+  `.syx`-dumpen i handen, för `push` är enda vägen tillbaka. Hinner enheten med
+  100 meddelanden i rad, eller hoppas platser över?
 - [ ] **Programbyten i `21`/`22`.** Vi skickade `00` medan enheten stod på
   program 10 och arbetsbufferten ändrades. Byt till program 1 och se om
   dess GEQ/PEQ också ändrats (`readback` efter Program Change), och prova
@@ -478,11 +493,15 @@ Ur [Gemini-rapporten](docs/gemini-report.md), inte verifierat på vår enhet
 
 ## Repot
 
-Verktygen som producerade allt ovan, och som kör hela kedjan REW → mätning →
-EQ-förslag → enheten:
+Roten är kontrollpanelen och dokumentationen. **Hela Python-sidan ligger i
+`python/`** (arkiverad 2026-09-09) tillsammans med `dumps/`, `history/` och
+exempel-JSON:erna – referens, och REW-flödets motor den dag panelen ska prata
+med REW:s API. Kommandona körs därifrån:
 
 ```sh
+cd python
 ./run.sh help               # full kommandolista
+./run.sh export             # REW-export med graf → förslagsfil åt kontrollpanelen
 ./run.sh gui                # webb-kontrollpanel: läs enheten, redigera EQ, skriv
 ./run.sh readback           # läs enhetens GEQ + PEQ (ändrar inget, kräver bara MIDI)
 ./run.sh test               # självtester, kräver varken REW eller enheten
@@ -490,11 +509,13 @@ EQ-förslag → enheten:
 
 | Var | Vad |
 |---|---|
+| `dsp8000_gui.html` | **kontrollpanelen** (roten): GEQ, PEQ, minnesavläsning, program, REW-import – publicerad på GitHub Pages |
+| `python/` | arkiverad Python-sida: `run.sh`, REW-flödet (`rew_export.py` = mätning → förslagsfil med graf och valbart antal PEQ-filter), MIDI-skripten, `syx_tools.py`, självtesterna |
 | [docs/midi.md](docs/midi.md) | **MIDI-referensen**: inställningar, CC, SysEx, dump-layout byte för byte, testlogg, ADRStudio-protokollet, källor |
 | [docs/verktyg.md](docs/verktyg.md) | skripten och kontrollpanelen: installation, `run.sh`, arbetsflöde, filöversikt |
 | [docs/rew.md](docs/rew.md) | REW-flödet: mätning, målkurva, Match Target, HTTP-API, `rew_script.py` |
 | [docs/midi_captures.txt](docs/midi_captures.txt) | rå labblogg från captures (historik; senare poster rättar tidigare) |
-| `dumps/*.syx` | referensdumpar från enheten med känt innehåll |
+| `python/dumps/*.syx` | referensdumpar från enheten med känt innehåll |
 | `docs/keiths-blog-…html` | sparad blogg om DSP8024 (Auto-Q, firmware via EPROM) |
 | [docs/gemini-report.md](docs/gemini-report.md) | Gemini-genererad rapport om DSP8000 (2026-09-03); inleds med vad i den som strider mot våra fynd |
 

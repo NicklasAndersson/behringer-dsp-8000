@@ -231,7 +231,10 @@ def get_filters(measurement_id):
 def keep_top_filters(measurement_id, filters, n=dsp8000.PEQ_COUNT):
     """
     REW:s Match target ger fler filter än DSP8000:s 3 PEQ. Behåll de n
-    peaking-filter (PK) med störst |gain|, skriv tillbaka till REW så
+    peaking-filter (PK) som det vore värst att lämna åt grafiska EQ:n
+    (dsp8000.filter_priority: |gain| viktat med hur mycket smalare filtret är
+    än ett 1/3-oktavsband - smala djupa rumsmoder först, breda korrigeringar
+    klarar de 31 banden själva). Skriv tillbaka till REW så
     /eq/frequency-response speglar exakt det som faktiskt hamnar på enheten
     (annars blir grafiska EQ:n fel). Shelf-filter (LS/HS) och annat som
     DSP8000:s PEQ inte kan göra slängs - grafiska EQ:n får ta den delen.
@@ -242,7 +245,8 @@ def keep_top_filters(measurement_id, filters, n=dsp8000.PEQ_COUNT):
         print(f"Hoppar över {dropped} filter som inte är PK (shelf o.dyl.).")
     if len(peaking) == len(filters) and len(filters) <= n:
         return filters
-    kept = sorted(peaking, key=lambda f: abs(f.get("gaindB", 0)), reverse=True)[:n]
+    kept = sorted(peaking, key=lambda f: dsp8000.filter_priority(
+        f.get("gaindB", 0), f.get("q", 0)), reverse=True)[:n]
     kept = sorted(kept, key=lambda f: f.get("frequency", 0))
     slots = max(len(get_filter_slots(measurement_id)), len(kept))
     body = [
@@ -252,7 +256,7 @@ def keep_top_filters(measurement_id, filters, n=dsp8000.PEQ_COUNT):
     ]
     body += [{"index": i, "type": "None"} for i in range(len(kept) + 1, slots + 1)]
     api_post(f"/measurements/{measurement_id}/filters", {"filters": body})
-    print(f"Behöll {len(kept)} av {len(filters)} filter (störst gain), "
+    print(f"Behöll {len(kept)} av {len(filters)} filter (smala och djupa först), "
           "skrev tillbaka till REW.")
     return get_filters(measurement_id)
 

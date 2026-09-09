@@ -36,6 +36,7 @@ DSP8000 via MIDI (steg 2, rew_to_dsp8000.py):
   ./run.sh send [--verify]        skicka de 31 bandvärdena (frågar först); --verify läser tillbaka
 
 Övrigt:
+  ./run.sh export                 REW-export med graf: välj mätning, se kurvorna, spara förslag åt dsp8000_gui.html (http://127.0.0.1:8767)
   ./run.sh gui                    webb-kontrollpanel: läs/redigera GEQ+PEQ, REW-flöde, kommandopanel (http://127.0.0.1:8765)
   ./run.sh show [--input FIL]     config-HTML (history/config/) ur ett EQ-förslag (default rew_eq_suggestion.json)
   ./run.sh test                   självtester, kräver varken REW, mido eller enheten
@@ -57,6 +58,8 @@ fi
 case "$1" in
   ports|monitor|sysex|readback|grab|raw|push|apply|roundtrip|probe|calibrate|send)
     exec .venv/bin/python rew_to_dsp8000.py "$@" ;;
+  export)
+    shift; exec .venv/bin/python rew_export.py "$@" ;;
   gui)
     shift; exec .venv/bin/python run_gui.py "$@" ;;
   show)
