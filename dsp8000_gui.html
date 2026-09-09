@@ -471,6 +471,8 @@ const peqRows = () => PEQ_LABELS.map((_, k) => ({
   bw_oct: +$('pb' + k).value || 1,
   gain_db: +$('pg' + k).value || 0,
 }));
+// Jämförelse på enhetens byte, så avrundning i fälten inte räknas som skillnad.
+const peqSig = peq => peq.map(peqRec).join();
 
 // --- bygg 31 band ---
 ISO.forEach((hz, i) => {
@@ -564,7 +566,9 @@ function showProgram(p) {
     $('pd' + k).textContent = f.on
       ? `${f.freq_hz.toFixed(0)} Hz / ${f.bw_oct.toFixed(2)} okt / ${f.gain_db.toFixed(1)} dB`
       : 'OFF';
-    if (f.on) setPeqRow(k, f);
+    // OFF i dumpen = filtret är borta: nolla fältet, annars ligger ett gammalt
+    // värde kvar och ljuger i kurvan. (JSON-filer har inget on-fält.)
+    setPeqRow(k, f.on === false ? { ...peqRows()[k], gain_db: 0 } : f);
   });
   draw();
   save();
@@ -775,6 +779,15 @@ function applySnapshot(st) {
   st.peq.forEach((f, k) => setPeqRow(k, f));
 }
 
+// Enheten är enda facit för vad som satt i kedjan under mätningen: jämför
+// fälten med senast hämtade dumpen (samma värden som dev-kolumnen).
+const peqCheck = () => !device
+  ? 'Hämta från enheten för att se om den hade dem.'
+  : peqSig(peqRows()) === peqSig(device.peq)
+    ? 'Enheten hade samma vid hämtningen.'
+    : '<b class="warn">⚠ enheten hade andra PEQ vid hämtningen – mätningen kan '
+      + 'vara gjord med dem.</b>';
+
 function applyRew() {
   if (!rewData) return;
   if ($('rewmode').value === 'sysex' && !sysexState) {
@@ -797,19 +810,20 @@ function applyRew() {
     $('mL').value = dbToCc(sysexState.mL); $('mLv').textContent = sysexState.mL.toFixed(2);
     $('mR').value = dbToCc(sysexState.mR); $('mRv').textContent = sysexState.mR.toFixed(2);
   }
-  // PEQ ersätts bara när hela EQ:n ersätts. Vid merge satt filtren redan i
-  // kedjan under mätningen, och enheten har bara 3 per kanal att stapla i -
-  // samma val som rew_script.py --refine ("PEQ-listan följer med oförändrad").
-  if (!merge) {
-    const top = (rewData.peq_filters || []).slice()
-      .sort((a, b) => filterPriority(b.gaindB, b.q) - filterPriority(a.gaindB, a.q)).slice(0, 3);
+  // Filens peq_filters, enhetens 3 platser per kanal (smala djupa först). Vid
+  // replace är de förslaget och skalas med andelen; vid merge är de samma lista
+  // som rew_script.py --refine bär med oförändrad, alltså filtren som satt i
+  // kedjan under mätningen - de sätts som de är i stället för att lita på att
+  // fälten står kvar. Saknar filen filter vid merge: rör dem inte.
+  const top = (rewData.peq_filters || []).slice()
+    .sort((a, b) => filterPriority(b.gaindB, b.q) - filterPriority(a.gaindB, a.q)).slice(0, 3);
+  if (!fromFile && (top.length || !merge))
     PEQ_LABELS.forEach((_, k) => {
       const f = top[k >> 1];
       setPeqRow(k, f ? { freq_hz: num(f.frequency) || 1000, bw_oct: qToOct(num(f.q) || 1),
-                         gain_db: num(f.gaindB) * amt }
+                         gain_db: num(f.gaindB) * (merge ? 1 : amt) }
                      : { freq_hz: 1000, bw_oct: 1, gain_db: 0 });
     });
-  }
   const d = bands.map((v, i) => v - rewSnap.bands[i]);
   const mean = d.reduce((a, x) => a + Math.abs(x), 0) / d.length;
   const worst = d.reduce((a, x, i) => Math.abs(x) > Math.abs(d[a]) ? i : a, 0);
@@ -817,7 +831,9 @@ function applyRew() {
     + `<b>${(mean / 16 * 100).toFixed(0)} %</b> av ±16 dB (${mean.toFixed(1)} dB per band), `
     + `störst ${d[worst] >= 0 ? '+' : ''}${d[worst].toFixed(1)} dB vid ${hzText(ISO[worst])}. `
     + (fromFile ? 'GEQ, PEQ och master tagna ur SysEx-filen, förslaget ovanpå banden.'
-       : merge ? 'PEQ orörda (mätningen gjordes med dem på).'
+       : merge ? (top.length ? 'PEQ satta från filen – samma filter som satt i '
+                              + 'kedjan under mätningen. ' + peqCheck()
+                            : 'Filen har inga PEQ, fälten orörda. ' + peqCheck())
        : 'PEQ ersatta av REW:s 3 viktigaste (smala djupa först), samma på L och R.');
   draw();
   save();

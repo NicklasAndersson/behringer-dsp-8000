@@ -193,7 +193,7 @@ filen, och panelen visar resultatet innan något skrivs:
 | Läge | Räkning | När |
 |---|---|---|
 | **Ersätt** | band = förslag × andel, PEQ = de 3 viktigaste (smala djupa först) × andel | mätningen gjord **utan** EQ i kedjan (varv 1) |
-| **Merga** | band = nuvarande + förslag × andel, PEQ orörda | mätningen gjord **med** EQ:n på (varv 2+) – samma sak som `--refine`, där andelen är `--refine-damping` |
+| **Merga** | band = nuvarande + förslag × andel, PEQ = filens `peq_filters` **ofördämpade** (`--refine` bär med dem oförändrade, så det är filtren som satt i kedjan under mätningen). Panelen jämför med senast hämtade dumpen och varnar om enheten hade andra | mätningen gjord **med** EQ:n på (varv 2+) – samma sak som `--refine`, där andelen är `--refine-damping` |
 | **Merga mot importerad SysEx-fil** | band = filens band + förslag × andel, filens PEQ och master följer med | som ovan, men basen läses ur en exporterad EQ-fil i stället för reglagen – säkrast när du vet att filen är det som satt på enheten under mätningen |
 
 Andelen är samma knopp som `--refine-damping`: 100 % = hela steget (störst

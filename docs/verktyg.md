@@ -272,8 +272,11 @@ SysEx kräver secure context, så https-versionen funkar där `file://` blockera
     andelen, och PEQ ersätts av REW:s 3 viktigaste filter – smala djupa först,
     samma rankning som `rew_export.py` (samma filter på L och R)
   - **Merga** – mätningen gjordes *med* EQ:n på: banden = nuvarande + förslaget ×
-    andelen, PEQ lämnas orörda. Exakt vad `./run.sh refine` gör, där andelen är
-    `--refine-damping` (0,5 = halva felet per varv, stabilt)
+    andelen. Exakt vad `./run.sh refine` gör, där andelen är `--refine-damping`
+    (0,5 = halva felet per varv, stabilt). PEQ sätts från filens `peq_filters`
+    utan dämpning – `--refine` bär med dem oförändrade, så det är filtren som
+    satt i kedjan under mätningen. Har du hämtat en dump jämför panelen med den
+    och varnar om enheten hade andra filter
   - **Merga mot importerad SysEx-fil** – samma räkning, men basen är den
     exporterade filens band i stället för reglagen, och filens PEQ och master
     följer med. Använd den när filen är exakt det som satt på enheten under
