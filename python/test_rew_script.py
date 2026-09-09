@@ -1340,10 +1340,12 @@ const dump = fs.readFileSync(process.argv[4]);        // riktig minnesdump
 $('rewmode').value = 'replace'; $('rewamt').value = '100';
 await $('file')._l.change({ target: { files: [{ name: 'rew.json', text: async () => json }], value: '' } });
 const full = bands(), summary = $('rewsum').innerHTML.replace(/<[^>]+>/g, '');
+const legendAfterImport = $('prevleg').hidden;      // jämförelsekurvan ritas
 $('rewamt').value = '50'; $('rewamt')._l.input();
 const half = bands();
 $('rewundo').onclick();
 const undone = bands(), hiddenAfterUndo = $('rewresult').hidden;
+const legendAfterUndo = $('prevleg').hidden;        // inget att jämföra med igen
 
 // SysEx-fil: importera ett känt läge (+2 dB överallt) och merga REW-förslaget
 // ovanpå filen i stället för reglagen (läge 3).
@@ -1355,7 +1357,7 @@ const enc = new TextEncoder();
 const fileEvent = (name, text) => ({ target: { value: '', files: [{ name,
   text: async () => text, arrayBuffer: async () => enc.encode(text).buffer }] } });
 await $('sxfile')._l.change(fileEvent('eq.json', eqFile));
-const imported = bands();
+const imported = bands(), legendAfterSysex = $('prevleg').hidden;
 $('rewmode').value = 'sysex'; $('rewamt').value = '50';
 await $('file')._l.change(fileEvent('rew.json', json));
 const merged = bands(), sysexSummary = $('rewsum').innerHTML.replace(/<[^>]+>/g, '');
@@ -1365,6 +1367,7 @@ await $('sxfile')._l.change({ target: { value: '', files: [{ name: 'dump.syx',
   arrayBuffer: async () => dump.buffer.slice(dump.byteOffset, dump.byteOffset + dump.length) }] } });
 console.log(JSON.stringify({ selftest, full, half, summary, undone, imported, hiddenAfterUndo,
                              merged, sysexSummary, hidden: $('rewresult').hidden,
+                             legendAfterImport, legendAfterUndo, legendAfterSysex,
                              fromDump: bands(), progList: $('progn').innerHTML }));
 """
 
@@ -1393,6 +1396,9 @@ def test_gui_html_loads_and_rew_import_works():
     for i, band in enumerate(dsp8000.ISO_BANDS):
         assert got["full"][i] == band_db(gains[str(band)])          # hela förslaget
         assert got["half"][i] == band_db(gains[str(band)] * 0.5)    # halva andelen
+    # kurvan "före importen" ritas efter en import och tas bort av ångra
+    assert got["legendAfterImport"] is False and got["legendAfterSysex"] is False
+    assert got["legendAfterUndo"] is True
     assert got["undone"] == [0] * 31 and got["hiddenAfterUndo"] is True
     assert got["hidden"] is False          # nya importen visar rutan igen
     assert "snittförändring" in got["summary"]

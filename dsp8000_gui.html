@@ -18,7 +18,7 @@
   Protokollet: docs/midi.md 6.8.  Självtest: lägg till #selftest i URL:en.
 -->
 <style>
-  :root { color-scheme: light dark; --l: #3a7bd5; --r: #e08a3c; }
+  :root { color-scheme: light dark; --l: #3a7bd5; --r: #e08a3c; --p: #8b5cf6; }
   body { font: 13px system-ui, sans-serif; margin: 1rem; }
   h1 { font-size: 1rem; }
   #bar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
@@ -29,6 +29,7 @@
   #graph { width: 100%; max-width: 1000px; height: 200px; display: block;
            border: 1px solid #8884; border-radius: 3px; }
   #legend { display: flex; gap: 1rem; margin: .3rem 0 1rem; opacity: .8; }
+  #legend span[hidden] { display: none; }
   #legend i { display: inline-block; width: 1.4rem; border-top: 2px solid;
               vertical-align: middle; margin-right: .3rem; font-style: normal; }
   #eq { display: flex; gap: 2px; align-items: flex-end; overflow-x: auto;
@@ -94,6 +95,7 @@
   <span><i style="color:var(--l)"></i>vänster (redigeras)</span>
   <span><i style="color:var(--r)"></i>höger (redigeras)</span>
   <span><i style="border-top-style:dashed;opacity:.8"></i>enheten / valt program</span>
+  <span id="prevleg" hidden><i style="color:var(--p);border-top-style:dotted"></i>före importen</span>
 </div>
 
 <div id="eq"></div>
@@ -680,9 +682,9 @@ function draw() {
   g.strokeStyle = '#888'; g.beginPath(); g.moveTo(0, y(0)); g.lineTo(w, y(0)); g.stroke();
 
   const peq = peqRows();
-  const curve = (bands, filters, color, dashed) => {
-    g.strokeStyle = color; g.lineWidth = dashed ? 1.5 : 2;
-    g.setLineDash(dashed ? [4, 4] : []);
+  const curve = (bands, filters, color, dash) => {
+    g.strokeStyle = color; g.lineWidth = dash ? 1.5 : 2;
+    g.setLineDash(dash || []);
     g.beginPath();
     for (let px = 0; px <= w; px++) {
       const f = 20 * Math.pow(10, px / w * 3);
@@ -693,9 +695,16 @@ function draw() {
     g.stroke(); g.setLineDash([]);
   };
   if (device) {
-    curve(device.L, device.peq.filter((f, k) => f.on && k % 2 === 0), '#3a7bd5', true);
-    curve(device.R, device.peq.filter((f, k) => f.on && k % 2 === 1), '#e08a3c', true);
+    curve(device.L, device.peq.filter((f, k) => f.on && k % 2 === 0), '#3a7bd5', [4, 4]);
+    curve(device.R, device.peq.filter((f, k) => f.on && k % 2 === 1), '#e08a3c', [4, 4]);
   }
+  // Läget före senaste importen: en kurva i egen färg att mäta skillnaden mot.
+  // Reglagen är en kanal, så filtren tas från den kanal som redigeras.
+  if (prev) {
+    const pk = $('mode').value === 'R' ? 1 : 0;
+    curve(prev.bands, prev.peq.filter((f, k) => f.gain_db && k % 2 === pk), '#8b5cf6', [2, 3]);
+  }
+  $('prevleg').hidden = !prev;
   const c = channels();
   curve(c.L, peq.filter((_, k) => k % 2 === 0), '#3a7bd5');
   curve(c.R, peq.filter((_, k) => k % 2 === 1), '#e08a3c');
@@ -703,6 +712,7 @@ function draw() {
 
 // --- SysEx-fil: export och import ---
 let sysexState = null;               // senast importerade filen, bas för läge 3
+let prev = null;                     // läget före senaste importen, ritas som jämförelse
 
 const editorState = () => {
   const c = channels();
@@ -743,6 +753,7 @@ $('sxfile').addEventListener('change', async e => {
     st = fileToState(obj);
     if (!st) { flash(`fel format – väntade {"format":"${EQ_FORMAT}", geq_l_db: [31 värden] …}`); return; }
   }
+  prev = snapshot();                  // jämförelsekurvan: så här såg det ut innan
   sysexState = st;
   $('sxinfo').textContent = `Importerad: ${f.name}`;
   $('rewsxopt').textContent = `Merga mot ${f.name}`;
@@ -822,7 +833,7 @@ $('file').addEventListener('change', async e => {
     return;
   }
   rewData = data; rewName = f.name;
-  rewSnap = snapshot();                    // ångra-punkten: läget före importen
+  rewSnap = prev = snapshot();             // ångra-punkt och jämförelsekurva
   $('rewresult').hidden = false;
   applyRew();
   flash(`importerade ${f.name} – inget skrivet till enheten än`);
@@ -838,7 +849,7 @@ $('rewwrite').onclick = sendAll;
 $('rewundo').onclick = () => {
   if (!rewSnap) return;
   applySnapshot(rewSnap);
-  rewData = null;
+  rewData = null; prev = null;             // tillbaka i utgångsläget: inget att jämföra med
   $('rewresult').hidden = true;
   draw(); save();
   flash('ångrade importen – enheten har kvar det som senast skrevs');

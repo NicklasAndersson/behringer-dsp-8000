@@ -234,7 +234,10 @@ SysEx kräver secure context, så https-versionen funkar där `file://` blockera
   kablarna i
 - **Kurvan**: GEQ interpolerad i log-frekvens plus de parametriska filtrens
   magnitud, L och R var för sig. Heldragen = det du redigerar, streckad = det
-  som senast hämtades från enheten
+  som senast hämtades från enheten (eller valt program / importerad fil),
+  **prickad lila = läget före senaste importen** – den ritas så fort du
+  importerar ett REW-förslag eller en SysEx-fil, så skillnaden syns direkt i
+  grafen, och försvinner när du ångrar importen
 - **SysEx-fil (export/import)**: **Exportera EQ till fil…** öppnar en filväljare
   (Chrome/Edge, annars vanlig nedladdning) och skriver en JSON med de 31 bandens
   dB per kanal, masterfaders, de 6 PEQ-posterna och de exakta SysEx-byten
