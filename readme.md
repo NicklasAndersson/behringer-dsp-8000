@@ -88,6 +88,9 @@ delay och AES/EBU som tillval.
 | Släckt | Bypass, signalen går orört igenom |
 | Blinkar rött | Overflow/clipping internt i DSP:n – sänk ingångsnivån |
 
+**Fail-safe-relä:** enheten har ett relä som kopplar ingång → utgång vid
+strömbortfall, så ljudet kommer alltid igenom (bekräftat på enheten).
+
 Vid REW-mätning: baseline med LED **släckt**, korrigerad mätning med LED **tänd**.
 
 **OS-version spelar roll.** 1996-OS:et har fast controller-offset (CC 64–127),
@@ -350,8 +353,6 @@ körbar form. Resultat skrivs in i [docs/midi.md testlogg](docs/midi.md#7-testlo
 
 **En signal och öronen**
 
-- [ ] **Fail-safe-relä. [G]**: vid strömbortfall kopplar reläer in → ut
-  direkt. Musik genom enheten, dra nätsladden: går ljudet igenom?
 - [ ] **Mutar en dump ljudet? [G]**: "ljudfunktionerna inaktiveras
   temporärt" under en minnesdump. Musik genom enheten, `./run.sh grab x.syx`:
   tystnar det i ~5 s? Samma vid RCV MEMORY DUMP. Avgör om `apply` kan köras
